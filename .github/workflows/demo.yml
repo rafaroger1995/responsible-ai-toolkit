@@ -7,6 +7,12 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: demo-pages
+  cancel-in-progress: false
 
 jobs:
   demo:
@@ -37,3 +43,23 @@ jobs:
         with:
           name: demo-output
           path: demo_output/
+
+      - name: Prepare web page
+        run: |
+          mkdir -p site
+          cp demo_output/report.html site/index.html
+          cp demo_output/decisions.json demo_output/audit_log.json site/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  publish:
+    needs: demo
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
