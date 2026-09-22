@@ -219,9 +219,20 @@ class TestHITLOrchestrator:
         assert result.decision.value == "override"
 
     def test_should_review_low_confidence(self):
-        hitl = HITLOrchestrator(confidence_threshold=0.70)
+        hitl = HITLOrchestrator(
+            confidence_threshold=0.70,
+            active_learning_rate=0.0,
+        )
         assert hitl.should_review(0.50) is True
-        assert hitl.should_review(0.90) is False or hitl.should_review(0.90) is True  # May be sampled
+        assert hitl.should_review(0.70) is False
+        assert hitl.should_review(0.90) is False
+
+    def test_should_review_when_sampling_is_enabled(self):
+        hitl = HITLOrchestrator(
+            confidence_threshold=0.70,
+            active_learning_rate=1.0,
+        )
+        assert hitl.should_review(0.90) is True
 
     def test_sla_compliance_rate(self):
         hitl = HITLOrchestrator()
