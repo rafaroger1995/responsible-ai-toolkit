@@ -128,11 +128,17 @@ class GovernanceReporter:
             drift_status = "no_data"
 
         # Determine policy status
-        if self._policy_reports:
-            latest_policy = self._policy_reports[-1]
-            policy_status = "compliant" if latest_policy.all_passed else "violations_detected"
+        if not self._policy_reports or not self._policy_reports[-1].results:
+            policy_status = "not_evaluated"
         else:
-            policy_status = "no_data"
+            latest_policy = self._policy_reports[-1]
+            policy_status = (
+                "evaluation_error"
+                if any(result.error is not None for result in latest_policy.results)
+                else "checks_passed"
+                if latest_policy.all_passed
+                else "checks_failed"
+            )
 
         snapshot = GovernanceSnapshot(
             timestamp=now,
@@ -224,11 +230,7 @@ class GovernanceReporter:
             },
             "policy_compliance": {
                 "total_evaluations": len(self._policy_reports),
-                "current_status": (
-                    "compliant" if self._policy_reports and self._policy_reports[-1].all_passed
-                    else "violations" if self._policy_reports
-                    else "no_evaluations"
-                ),
+                "current_status": self.create_snapshot().policy_status,
                 "evaluations": [
                     {
                         "pass_rate": r.pass_rate,
