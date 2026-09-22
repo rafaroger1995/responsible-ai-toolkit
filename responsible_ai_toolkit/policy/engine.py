@@ -114,7 +114,7 @@ class EvaluationReport:
 
     @property
     def all_passed(self) -> bool:
-        return all(r.passed for r in self.results)
+        return bool(self.results) and all(r.passed for r in self.results)
 
     @property
     def critical_violations(self) -> List[PolicyResult]:
