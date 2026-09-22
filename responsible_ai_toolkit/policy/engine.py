@@ -222,7 +222,7 @@ class PolicyEngine:
                 f"(four-fifths rule). Violations indicate potential adverse "
                 f"impact requiring review."
             ),
-            rule=lambda ctx, t=psi_threshold: ctx["psi"] < t,
+            rule=lambda ctx, k=metric_key, t=threshold: ctx.get(k, 0) >= t,
             severity="critical",
             frameworks=frameworks or ["ECOA", "NIST-AI-RMF"],
             category="fairness",
@@ -264,7 +264,7 @@ class PolicyEngine:
                 f"Exceeding this threshold indicates significant distribution "
                 f"shift requiring model revalidation."
             ),
-            rule=lambda ctx, t=psi_threshold: ctx.get("psi", 0) < t,
+            rule=lambda ctx, t=psi_threshold: ctx["psi"] < t,
             severity="critical",
             frameworks=frameworks or ["SR-11-7", "OCC-MRM"],
             category="stability",
