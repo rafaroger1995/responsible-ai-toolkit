@@ -29,6 +29,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import time
@@ -112,16 +113,23 @@ class AuditLogger:
         entry_id: str,
         sequence_number: int,
         timestamp: float,
+        timestamp_iso: str,
+        system_id: str,
         event_type: str,
         payload: Dict[str, Any],
         previous_hash: str,
     ) -> str:
-        """Create a deterministic string for hashing."""
+        """Create a deterministic string for hashing.
+
+        Every stored field of an entry except ``entry_hash`` is included,
+        so changing any of them is detected by ``verify_chain``.
+        """
         content = {
             "entry_id": entry_id,
             "sequence_number": sequence_number,
             "timestamp": timestamp,
-            "system_id": self.system_id,
+            "timestamp_iso": timestamp_iso,
+            "system_id": system_id,
             "event_type": event_type,
             "payload": payload,
             "previous_hash": previous_hash,
@@ -137,12 +145,19 @@ class AuditLogger:
         entry_id = str(uuid.uuid4())
         self._sequence += 1
         now = time.time()
+        timestamp_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
         previous_hash = self._get_previous_hash()
+
+        # Store a private copy so later changes to the caller's data
+        # cannot alter the logged record.
+        payload = copy.deepcopy(payload)
 
         hashable = self._create_hashable_content(
             entry_id=entry_id,
             sequence_number=self._sequence,
             timestamp=now,
+            timestamp_iso=timestamp_iso,
+            system_id=self.system_id,
             event_type=event_type.value,
             payload=payload,
             previous_hash=previous_hash,
@@ -153,7 +168,7 @@ class AuditLogger:
             entry_id=entry_id,
             sequence_number=self._sequence,
             timestamp=now,
-            timestamp_iso=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+            timestamp_iso=timestamp_iso,
             system_id=self.system_id,
             event_type=event_type.value,
             payload=payload,
@@ -304,11 +319,17 @@ class AuditLogger:
             if entry.previous_hash != expected_prev:
                 return False
 
-            # Recompute and verify entry hash
+            # Every entry must belong to this logger's system
+            if entry.system_id != self.system_id:
+                return False
+
+            # Recompute and verify entry hash from the entry's own stored values
             hashable = self._create_hashable_content(
                 entry_id=entry.entry_id,
                 sequence_number=entry.sequence_number,
                 timestamp=entry.timestamp,
+                timestamp_iso=entry.timestamp_iso,
+                system_id=entry.system_id,
                 event_type=entry.event_type,
                 payload=entry.payload,
                 previous_hash=entry.previous_hash,
