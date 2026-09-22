@@ -44,15 +44,9 @@ jobs:
           name: demo-output
           path: demo_output/
 
-      - name: Prepare web page
-        run: |
-          mkdir -p site
-          cp demo_output/report.html site/index.html
-          cp demo_output/decisions.json demo_output/audit_log.json site/
-
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: demo_output
 
   publish:
     needs: demo
