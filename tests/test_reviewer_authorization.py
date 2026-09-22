@@ -1,3 +1,4 @@
+import copy
 from dataclasses import asdict
 
 import pytest
@@ -42,7 +43,7 @@ def test_unauthorized_decision_leaves_records_unchanged(
     case_before = asdict(case)
     assigned_before = asdict(assigned)
     other_before = asdict(other)
-    log_before = hitl.decision_log
+    log_before = copy.deepcopy(hitl.decision_log)
 
     with pytest.raises(ValueError, match=expected_error):
         hitl.record_decision(
