@@ -1,33 +1,39 @@
 """
-Policy-as-code engine for automated regulatory compliance.
+Policy-as-code engine for configurable governance checks.
 
-Translates regulatory requirements, governance frameworks, and
-institutional policies into executable runtime checks that can be
-applied to AI model inputs, outputs, and operational contexts.
+Evaluates rules defined by the user against a supplied context (for
+example, model outputs, scores, and metadata) and reports which rules
+passed, failed, or could not be evaluated.
 
 Supports:
-  - Declarative policy definitions (JSON/dict-based rules)
-  - Composite policies with AND/OR/NOT logic
-  - Contextual evaluation with dynamic data binding
-  - Policy versioning and audit-ready evidence generation
-  - Framework alignment tags (NIST AI RMF, SR 11-7, ECOA, etc.)
+  - Policies defined as Python callables with metadata
+  - Filtering by category and by user-supplied reference labels
+  - Evaluation history and exportable per-policy results
+  - Factory functions for common checks (fairness metric thresholds,
+    minimum confidence, drift thresholds, and required fields)
 
-This approach aligns with the NIST AI RMF's Govern and Map functions,
-enabling institutions to encode their compliance obligations as
-testable, reproducible, and auditable controls.
+Limitations:
+  - A policy checks only what its rule expresses. Passing results do not
+    establish compliance with any law, regulation, or guidance.
+  - Reference labels in ``frameworks`` are optional descriptive tags
+    chosen by the user. A label does not mean the rule implements the
+    referenced source. The built-in factories apply no labels by default.
+  - Default thresholds are illustrative configuration values, not legal
+    or supervisory standards.
 
 Usage:
-    >>> from responsible_ai_toolkit.policy import PolicyEngine
+    >>> from responsible_ai_toolkit.policy.engine import Policy, PolicyEngine
     >>> engine = PolicyEngine()
     >>> engine.add_policy(Policy(
-    ...     policy_id="fair-lending-001",
-    ...     name="Adverse Action Threshold",
-    ...     description="Reject AI decisions with confidence below 0.60",
+    ...     policy_id="confidence-001",
+    ...     name="Minimum confidence for automated decisions",
+    ...     description="Flags decisions with confidence below 0.60 for human review.",
     ...     rule=lambda ctx: ctx["confidence"] >= 0.60,
-    ...     frameworks=["ECOA", "NIST-AI-RMF"],
     ...     severity="critical",
     ... ))
-    >>> result = engine.evaluate({"confidence": 0.45, "model_id": "credit-v2"})
+    >>> report = engine.evaluate({"confidence": 0.45, "model_id": "credit-v2"})
+    >>> report.all_passed
+    False
 """
 
 from __future__ import annotations
@@ -39,7 +45,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 @dataclass
 class Policy:
-    """A single policy rule for automated compliance checking.
+    """A single configurable policy rule.
 
     Parameters
     ----------
@@ -55,8 +61,10 @@ class Policy:
     severity : str
         "info", "warning", or "critical".
     frameworks : list of str
-        Regulatory frameworks this policy supports
-        (e.g., ["NIST-AI-RMF", "ECOA", "SR-11-7"]).
+        Optional reference labels chosen by the user (e.g., an internal
+        policy number or an external framework the rule relates to).
+        Labels are descriptive only and do not indicate that the rule
+        implements the referenced source.
     category : str
         Policy category (e.g., "fairness", "transparency", "security").
     version : str
@@ -130,12 +138,12 @@ class EvaluationReport:
 
     @property
     def pass_rate(self) -> Optional[float]:
-     if not self.results:
-         return None
-     return sum(1 for r in self.results if r.passed) / len(self.results)
+        if not self.results:
+            return None
+        return sum(1 for r in self.results if r.passed) / len(self.results)
 
     def by_framework(self, framework: str) -> List[PolicyResult]:
-        """Filter results by regulatory framework."""
+        """Filter results by a user-supplied reference label."""
         return [r for r in self.results if framework in r.frameworks]
 
     def summary(self) -> str:
@@ -148,11 +156,11 @@ class EvaluationReport:
             f"  Violations:               {len(self.violations)}",
             f"    Critical:               {len(self.critical_violations)}",
             f"    Warnings:               {len(self.warnings)}",
-             (
-               f"  Pass Rate:                {self.pass_rate:.1%}"
-               if self.pass_rate is not None
-               else "  Pass Rate:                N/A - no policies evaluated"
-             ),
+            (
+                f"  Pass Rate:                {self.pass_rate:.1%}"
+                if self.pass_rate is not None
+                else "  Pass Rate:                N/A - no policies evaluated"
+            ),
         ]
         if self.violations:
             lines.append("\n--- Violations ---")
@@ -168,7 +176,7 @@ class PolicyEngine:
     """Policy-as-code evaluation engine.
 
     Manages a registry of policies and evaluates them against
-    runtime contexts to produce compliance evidence.
+    runtime contexts to produce per-policy evaluation results.
     """
 
     def __init__(self) -> None:
@@ -222,13 +230,14 @@ class PolicyEngine:
             policy_id=policy_id,
             name=f"Fairness Threshold: {metric_key} >= {threshold}",
             description=(
-                f"Requires {metric_key} ratio to be at least {threshold} "
-                f"(four-fifths rule). Violations indicate potential adverse "
-                f"impact requiring review."
+                f"Checks that {metric_key} is at least {threshold}. A lower "
+                f"value is a finding for review, not a determination of "
+                f"unlawful discrimination; the threshold is configurable and "
+                f"is not a legal standard."
             ),
             rule=lambda ctx, k=metric_key, t=threshold: ctx.get(k, 0) >= t,
             severity="critical",
-            frameworks=frameworks or ["ECOA", "NIST-AI-RMF"],
+            frameworks=list(frameworks) if frameworks else [],
             category="fairness",
         )
 
@@ -243,13 +252,13 @@ class PolicyEngine:
             policy_id=policy_id,
             name=f"Minimum Confidence: >= {threshold}",
             description=(
-                f"AI decisions with confidence below {threshold} must be "
-                f"routed to human review. Ensures adequate model certainty "
-                f"before automated processing."
+                f"Flags decisions with confidence below {threshold} so they "
+                f"can be routed to human review. Confidence scores depend on "
+                f"the model and its calibration."
             ),
             rule=lambda ctx, t=threshold: ctx.get("confidence", 0) >= t,
             severity="critical",
-            frameworks=frameworks or ["SR-11-7", "NIST-AI-RMF"],
+            frameworks=list(frameworks) if frameworks else [],
             category="transparency",
         )
 
@@ -264,13 +273,14 @@ class PolicyEngine:
             policy_id=policy_id,
             name=f"Model Drift: PSI < {psi_threshold}",
             description=(
-                f"Population Stability Index must remain below {psi_threshold}. "
-                f"Exceeding this threshold indicates significant distribution "
-                f"shift requiring model revalidation."
+                f"Checks that the Population Stability Index is below "
+                f"{psi_threshold}. Values at or above the threshold should "
+                f"prompt investigation; they do not by themselves establish "
+                f"that the model is invalid or must be revalidated."
             ),
             rule=lambda ctx, t=psi_threshold: ctx["psi"] < t,
             severity="critical",
-            frameworks=frameworks or ["SR-11-7", "OCC-MRM"],
+            frameworks=list(frameworks) if frameworks else [],
             category="stability",
         )
 
@@ -292,7 +302,7 @@ class PolicyEngine:
                 ctx.get(f) is not None for f in fields
             ),
             severity="warning",
-            frameworks=frameworks or ["NIST-AI-RMF"],
+            frameworks=list(frameworks) if frameworks else [],
             category="data_quality",
         )
 
@@ -316,7 +326,7 @@ class PolicyEngine:
         categories : list of str, optional
             Only evaluate policies in these categories.
         frameworks : list of str, optional
-            Only evaluate policies tagged with these frameworks.
+            Only evaluate policies tagged with these reference labels.
 
         Returns
         -------
