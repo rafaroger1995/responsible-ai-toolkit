@@ -1,0 +1,39 @@
+name: Demo run
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install toolkit
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run model review demo on synthetic data
+        run: python examples/model_review_demo.py demo_output
+
+      - name: Publish summary to this run's page
+        if: always()
+        run: |
+          if [ -f demo_output/summary.md ]; then
+            cat demo_output/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Save output files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-output
+          path: demo_output/
