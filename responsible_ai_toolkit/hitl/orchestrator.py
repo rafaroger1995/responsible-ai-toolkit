@@ -277,6 +277,21 @@ class HITLOrchestrator:
             raise ValueError(f"Case '{internal_id}' not found.")
 
         case = self._cases[internal_id]
+
+        if reviewer_id not in self._reviewers:
+            raise ValueError(f"Reviewer '{reviewer_id}' is not registered.")
+
+        reviewer = self._reviewers[reviewer_id]
+
+        if not reviewer.active:
+            raise ValueError(f"Reviewer '{reviewer_id}' is inactive.")
+
+        if case.assigned_to != reviewer_id:
+            raise ValueError("Only the assigned reviewer may record a decision.")
+
+        if reviewer.roles and case.category not in reviewer.roles:
+            raise ValueError("Reviewer is not authorized for this case category.")
+
         dec = ReviewDecision(decision)
 
         case.decision = dec
