@@ -129,10 +129,10 @@ class EvaluationReport:
         return [r for r in self.results if not r.passed]
 
     @property
-    def pass_rate(self) -> float:
-        if not self.results:
-            return 1.0
-        return sum(1 for r in self.results if r.passed) / len(self.results)
+    def pass_rate(self) -> Optional[float]:
+     if not self.results:
+         return None
+     return sum(1 for r in self.results if r.passed) / len(self.results)
 
     def by_framework(self, framework: str) -> List[PolicyResult]:
         """Filter results by regulatory framework."""
@@ -148,7 +148,11 @@ class EvaluationReport:
             f"  Violations:               {len(self.violations)}",
             f"    Critical:               {len(self.critical_violations)}",
             f"    Warnings:               {len(self.warnings)}",
-            f"  Pass Rate:                {self.pass_rate:.1%}",
+             (
+               f"  Pass Rate:                {self.pass_rate:.1%}"
+               if self.pass_rate is not None
+               else "  Pass Rate:                N/A - no policies evaluated"
+             ),
         ]
         if self.violations:
             lines.append("\n--- Violations ---")
