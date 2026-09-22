@@ -1,8 +1,9 @@
 """
-Model review demo on synthetic lending data.
+Model review demo on synthetic lending and insurance data.
 
-Runs a small end-to-end workflow with the toolkit's audit, policy, and
-human-review components:
+Runs the same toolkit components, unchanged, on two synthetic scenarios:
+consumer lending decisions and small-business property insurance quotes.
+For each scenario it:
 
   1. Records each model decision in a hash-chained audit log.
   2. Evaluates each decision against configurable policy checks.
@@ -11,12 +12,17 @@ human-review components:
   4. Shows the reviewer-authorization and repeat-decision controls.
   5. Verifies the audit chain, then shows that an edited copy fails.
 
-All data is synthetic and generated with a fixed seed. The output shows
+Only the scenario configuration differs between the two runs: the data,
+the rule settings, the reviewer roles, and a stand-in for reviewer
+judgment. The toolkit code is the same for both.
+
+All data is synthetic and generated with fixed seeds. The output shows
 software behavior only. It is not a model validation, a deployment, or
 evidence of use by any institution.
 
-Writes summary.md, report.html, decisions.json, and audit_log.json to
-the output directory.
+Writes to the output directory: index.html (comparison page), one HTML
+review record per scenario, the raw decisions and audit logs as JSON,
+and summary.md.
 
 Usage:
     python examples/model_review_demo.py [output_dir]
@@ -31,20 +37,14 @@ import os
 import random
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Tuple
 
 from responsible_ai_toolkit.audit import AuditLogger
 from responsible_ai_toolkit.hitl import HITLOrchestrator
 from responsible_ai_toolkit.hitl.orchestrator import ReviewDecision
-from responsible_ai_toolkit.policy.engine import PolicyEngine
-
-SEED = 20260922
-N_APPLICATIONS = 12
-MODEL_ID = "synthetic-credit-model-v1"
-DTI_REVIEW_LIMIT = 0.45
-INPUT_FIELDS = ("requested_amount", "debt_to_income", "credit_history_months")
-TAMPER_TARGET = "SYN-006"
+from responsible_ai_toolkit.policy.engine import Policy, PolicyEngine
 
 AVAILABLE_DECISIONS = {d.value for d in ReviewDecision}
 APPROVE = "approve"
@@ -57,13 +57,40 @@ if APPROVE not in AVAILABLE_DECISIONS or DECLINE is None:
     )
 
 
-def make_applications(seed: int = SEED, n: int = N_APPLICATIONS) -> List[Dict[str, Any]]:
-    """Generate synthetic loan applications with model outputs."""
+# ----------------------------------------------------------------------
+# Scenario configuration
+# ----------------------------------------------------------------------
+
+@dataclass
+class Scenario:
+    """Everything that differs between runs. The toolkit code does not."""
+
+    key: str
+    title: str
+    record_label: str
+    category: str
+    system_id: str
+    model_id: str
+    seed: int
+    reviewers: List[str]
+    input_fields: Tuple[str, ...]
+    required_fields: List[str]
+    confidence_threshold: float
+    positive_recommendation: str
+    make_records: Callable[[int], List[Dict[str, Any]]]
+    reviewer_rule: Callable[[Dict[str, Any]], Tuple[str, str]]
+    tamper_target: str
+    rules_text: str
+    extra_policies: List[Policy] = field(default_factory=list)
+
+
+def lending_records(seed: int) -> List[Dict[str, Any]]:
+    """Synthetic consumer loan applications with model outputs."""
     rng = random.Random(seed)
-    applications = []
-    for i in range(1, n + 1):
-        applications.append({
-            "application_ref": f"SYN-{i:03d}",
+    records = []
+    for i in range(1, 13):
+        records.append({
+            "ref": f"SYN-{i:03d}",
             "requested_amount": rng.choice([5000, 10000, 15000, 25000, 40000]),
             "debt_to_income": round(rng.uniform(0.10, 0.55), 2),
             "credit_history_months": rng.randint(6, 240),
@@ -71,18 +98,109 @@ def make_applications(seed: int = SEED, n: int = N_APPLICATIONS) -> List[Dict[st
             "confidence": round(rng.uniform(0.40, 0.98), 2),
         })
     # One record with a missing input, to exercise the completeness check.
-    applications[4]["credit_history_months"] = None
-    return applications
+    records[4]["credit_history_months"] = None
+    return records
 
 
-def reviewer_rule(app: Dict[str, Any]) -> tuple:
-    """Deterministic stand-in for a human reviewer's judgment."""
-    if app["credit_history_months"] is None:
+def lending_reviewer(record: Dict[str, Any]) -> Tuple[str, str]:
+    """Deterministic stand-in for a loan reviewer's judgment."""
+    if record["credit_history_months"] is None:
         return DECLINE, "Required input missing; cannot approve without it."
-    if app["debt_to_income"] > DTI_REVIEW_LIMIT:
-        return DECLINE, f"Debt-to-income above {DTI_REVIEW_LIMIT} on manual review."
+    if record["debt_to_income"] > 0.45:
+        return DECLINE, "Debt-to-income above 0.45 on manual review."
     return APPROVE, "Inputs complete and within review guidelines."
 
+
+def insurance_records(seed: int) -> List[Dict[str, Any]]:
+    """Synthetic small-business property insurance quotes with model outputs."""
+    rng = random.Random(seed)
+    records = []
+    for i in range(1, 13):
+        records.append({
+            "ref": f"INS-{i:03d}",
+            "coverage_amount": rng.choice([250000, 500000, 750000, 1200000, 2000000]),
+            "prior_claims": rng.randint(0, 4),
+            "building_age_years": rng.randint(1, 80),
+            "last_inspection_year": rng.randint(2016, 2026),
+            "model_recommendation": "offer" if rng.random() < 0.75 else "decline",
+            "confidence": round(rng.uniform(0.45, 0.99), 2),
+        })
+    # One record with a missing input, to exercise the completeness check.
+    records[2]["last_inspection_year"] = None
+    return records
+
+
+def insurance_reviewer(record: Dict[str, Any]) -> Tuple[str, str]:
+    """Deterministic stand-in for an underwriter's judgment."""
+    if record["last_inspection_year"] is None:
+        return DECLINE, "No inspection on file; cannot offer without it."
+    if record["prior_claims"] >= 3:
+        return DECLINE, "Three or more prior claims on manual review."
+    return APPROVE, "Inputs complete and within underwriting guidelines."
+
+
+SCENARIOS = [
+    Scenario(
+        key="lending",
+        title="Consumer lending decisions",
+        record_label="Application",
+        category="lending",
+        system_id="synthetic-lending-model",
+        model_id="synthetic-credit-model-v1",
+        seed=20260922,
+        reviewers=["reviewer-a", "reviewer-b"],
+        input_fields=("requested_amount", "debt_to_income", "credit_history_months"),
+        required_fields=["debt_to_income", "credit_history_months"],
+        confidence_threshold=0.60,
+        positive_recommendation="approve",
+        make_records=lending_records,
+        reviewer_rule=lending_reviewer,
+        tamper_target="SYN-006",
+        rules_text=(
+            "model confidence of at least 0.60, and required inputs present "
+            "(debt-to-income, credit history)"
+        ),
+    ),
+    Scenario(
+        key="insurance",
+        title="Small-business property insurance quotes",
+        record_label="Quote",
+        category="insurance",
+        system_id="synthetic-underwriting-model",
+        model_id="synthetic-property-model-v1",
+        seed=20260923,
+        reviewers=["underwriter-a", "underwriter-b"],
+        input_fields=(
+            "coverage_amount", "prior_claims", "building_age_years", "last_inspection_year",
+        ),
+        required_fields=["prior_claims", "last_inspection_year"],
+        confidence_threshold=0.70,
+        positive_recommendation="offer",
+        make_records=insurance_records,
+        reviewer_rule=insurance_reviewer,
+        tamper_target="INS-006",
+        rules_text=(
+            "model confidence of at least 0.70, required inputs present "
+            "(prior claims, last inspection year), and coverage above "
+            "1,000,000 referred for review"
+        ),
+        extra_policies=[
+            Policy(
+                policy_id="high-coverage-referral",
+                name="High coverage referral",
+                description="Quotes with coverage above 1,000,000 are referred for review.",
+                rule=lambda ctx: ctx.get("coverage_amount", 0) <= 1_000_000,
+                severity="warning",
+                category="underwriting",
+            )
+        ],
+    ),
+]
+
+
+# ----------------------------------------------------------------------
+# Running a scenario (identical toolkit calls for every scenario)
+# ----------------------------------------------------------------------
 
 def attempt(fn) -> str:
     try:
@@ -92,52 +210,54 @@ def attempt(fn) -> str:
         return f"Rejected: {exc}"
 
 
-def run(output_dir: Path) -> Dict[str, Any]:
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    audit = AuditLogger(system_id="synthetic-lending-model")
+def run_scenario(sc: Scenario) -> Dict[str, Any]:
+    audit = AuditLogger(system_id=sc.system_id)
     engine = PolicyEngine()
     engine.add_policy(
-        PolicyEngine.confidence_threshold_policy("min-confidence", threshold=0.60)
+        PolicyEngine.confidence_threshold_policy(
+            "min-confidence", threshold=sc.confidence_threshold
+        )
     )
     engine.add_policy(
         PolicyEngine.data_completeness_policy(
-            "required-inputs",
-            required_fields=["debt_to_income", "credit_history_months"],
+            "required-inputs", required_fields=sc.required_fields
         )
     )
+    for policy in sc.extra_policies:
+        engine.add_policy(policy)
+
     hitl = HITLOrchestrator()
-    hitl.add_reviewer("reviewer-a", roles=["lending"])
-    hitl.add_reviewer("reviewer-b", roles=["lending"])
+    for reviewer in sc.reviewers:
+        hitl.add_reviewer(reviewer, roles=[sc.category])
 
     rows = []
     queue = []
-    for app in make_applications():
-        ref = app["application_ref"]
+    for record in sc.make_records(sc.seed):
+        ref = record["ref"]
         ai_decision = {
-            "recommendation": app["model_recommendation"],
-            "confidence": app["confidence"],
+            "recommendation": record["model_recommendation"],
+            "confidence": record["confidence"],
         }
         audit.log_prediction(
-            model_id=MODEL_ID,
-            input_data={k: app[k] for k in INPUT_FIELDS},
+            model_id=sc.model_id,
+            input_data={k: record[k] for k in sc.input_fields},
             output=ai_decision,
-            metadata={"application_ref": ref},
+            metadata={"record_ref": ref},
         )
 
-        report = engine.evaluate(app)
+        report = engine.evaluate(record)
         for result in report.results:
             audit.log_policy_check(
                 policy_id=result.policy_id,
                 result="passed" if result.passed else "failed",
-                details={"application_ref": ref, "error": result.error},
+                details={"record_ref": ref, "error": result.error},
             )
         findings = [r.policy_id for r in report.violations]
 
         row = {
-            "application_ref": ref,
-            "model_recommendation": app["model_recommendation"],
-            "confidence": app["confidence"],
+            "record_ref": ref,
+            "model_recommendation": record["model_recommendation"],
+            "confidence": record["confidence"],
             "policy_findings": findings,
             "route": "automated",
             "reviewer": None,
@@ -147,26 +267,26 @@ def run(output_dir: Path) -> Dict[str, Any]:
         if findings:
             case = hitl.submit_for_review(
                 case_id=ref,
-                category="lending",
+                category=sc.category,
                 ai_decision=ai_decision,
                 reason="Failed policy checks: " + ", ".join(findings),
             )
-            queue.append((app, ai_decision, case, row))
+            queue.append((record, ai_decision, case, row))
         rows.append(row)
 
     # Reviewers work through the queue after all cases are submitted.
-    for app, ai_decision, case, row in queue:
-        decision, rationale = reviewer_rule(app)
+    for record, ai_decision, case, row in queue:
+        decision, rationale = sc.reviewer_rule(record)
         hitl.record_decision(case.internal_id, case.assigned_to, decision, rationale)
-        model_says_approve = app["model_recommendation"] == "approve"
-        override = (decision == APPROVE) != model_says_approve
+        model_positive = record["model_recommendation"] == sc.positive_recommendation
+        override = (decision == APPROVE) != model_positive
         audit.log_human_review(
             reviewer_id=case.assigned_to,
             decision=decision,
             reasoning=rationale,
             original_prediction=ai_decision,
             override=override,
-            metadata={"application_ref": app["application_ref"]},
+            metadata={"record_ref": record["ref"]},
         )
         row.update(
             route="human review",
@@ -177,12 +297,12 @@ def run(output_dir: Path) -> Dict[str, Any]:
 
     # Review controls on a separate case.
     ctrl = hitl.submit_for_review(
-        case_id="SYN-CONTROL",
-        category="lending",
-        ai_decision={"recommendation": "approve", "confidence": 0.51},
+        case_id=f"{sc.key.upper()}-CONTROL",
+        category=sc.category,
+        ai_decision={"recommendation": sc.positive_recommendation, "confidence": 0.51},
         reason="Control demonstration",
     )
-    other = "reviewer-b" if ctrl.assigned_to == "reviewer-a" else "reviewer-a"
+    other = next(r for r in sc.reviewers if r != ctrl.assigned_to)
     controls = [
         ("Decision by an unregistered reviewer",
          attempt(lambda: hitl.record_decision(ctrl.internal_id, "reviewer-z", APPROVE, "n/a"))),
@@ -200,22 +320,10 @@ def run(output_dir: Path) -> Dict[str, Any]:
     tamper_index = next(
         i for i, e in enumerate(tampered._entries)
         if e.event_type == "prediction"
-        and e.payload["metadata"].get("application_ref") == TAMPER_TARGET
+        and e.payload["metadata"].get("record_ref") == sc.tamper_target
     )
     tampered._entries[tamper_index].payload["output"]["confidence"] = 0.99
     tampered_ok = tampered.verify_chain()
-
-    results = {
-        "rows": rows,
-        "controls": controls,
-        "audit_entries": audit.size,
-        "chain_verified": chain_ok,
-        "tampered_copy_verified": tampered_ok,
-        "tamper_index": tamper_index,
-        "event_types": [e.event_type for e in audit.entries],
-        "head_hash": audit.entries[-1].entry_hash,
-        "provenance": provenance(),
-    }
 
     expected = ["Rejected", "Rejected", "Accepted", "Rejected"]
     checks_ok = (
@@ -223,13 +331,20 @@ def run(output_dir: Path) -> Dict[str, Any]:
         and not tampered_ok
         and [c[1].split(":")[0] for c in controls] == expected
     )
-    results["all_checks_as_expected"] = checks_ok
-
-    (output_dir / "audit_log.json").write_text(audit.export_json())
-    (output_dir / "decisions.json").write_text(json.dumps(rows, indent=2))
-    (output_dir / "summary.md").write_text(render_summary(results))
-    (output_dir / "report.html").write_text(render_html(results), encoding="utf-8")
-    return results
+    return {
+        "scenario": sc,
+        "rows": rows,
+        "controls": controls,
+        "rule_count": len(engine.list_policies()),
+        "audit": audit,
+        "audit_entries": audit.size,
+        "chain_verified": chain_ok,
+        "tampered_copy_verified": tampered_ok,
+        "tamper_index": tamper_index,
+        "event_types": [e.event_type for e in audit.entries],
+        "head_hash": audit.entries[-1].entry_hash,
+        "all_checks_as_expected": checks_ok,
+    }
 
 
 def provenance() -> Dict[str, Any]:
@@ -249,66 +364,9 @@ def provenance() -> Dict[str, Any]:
     }
 
 
-def render_summary(results: Dict[str, Any]) -> str:
-    rows = results["rows"]
-    commit = results["provenance"]["commit"]
-    generated = results["provenance"]["generated"]
-    reviewed = [r for r in rows if r["route"] == "human review"]
-    lines = [
-        "# Model review demo (synthetic data)",
-        "",
-        f"Generated by `examples/model_review_demo.py` at commit `{commit}` on {generated}.",
-        "",
-        f"All data is synthetic (fixed seed {SEED}). This output shows software "
-        "behavior only. It is not a model validation, a deployment, or evidence "
-        "of use by any institution.",
-        "",
-        "## Decisions",
-        "",
-        "| Application | Model recommendation | Confidence | Policy findings | Route | Reviewer | Review decision |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
-    ]
-    for r in rows:
-        lines.append(
-            f"| {r['application_ref']} | {r['model_recommendation']} | {r['confidence']:.2f} | "
-            f"{', '.join(r['policy_findings']) or 'none'} | {r['route']} | "
-            f"{r['reviewer'] or '-'} | "
-            f"{(r['review_decision'] or '-') + (' (override)' if r['override'] else '')} |"
-        )
-    lines += [
-        "",
-        f"Applications: {len(rows)}. Automated: {len(rows) - len(reviewed)}. "
-        f"Routed to human review: {len(reviewed)}. "
-        f"Reviewer overrides of the model: {sum(r['override'] for r in reviewed)}.",
-        "",
-        "Policy checks: minimum model confidence 0.60; required inputs present "
-        "(debt-to-income, credit history). Thresholds are illustrative configuration values.",
-        "",
-        "## Review controls",
-        "",
-        "| Attempt | Result |",
-        "| --- | --- |",
-    ]
-    for label, outcome in results["controls"]:
-        lines.append(f"| {label} | {outcome} |")
-    lines += [
-        "",
-        "## Audit log",
-        "",
-        f"Entries recorded: {results['audit_entries']}. "
-        f"Chain verification: {'passed' if results['chain_verified'] else 'FAILED'}.",
-        "",
-        f"Chain head hash: `{results['head_hash']}`. Recording this value separately "
-        "makes later removal of entries detectable.",
-        "",
-        "Copy of the log with one prediction's confidence edited: verification "
-        f"{'passed (unexpected)' if results['tampered_copy_verified'] else 'failed, as expected'}.",
-        "",
-        f"All demo checks as expected: {'yes' if results['all_checks_as_expected'] else 'NO'}.",
-        "",
-    ]
-    return "\n".join(lines)
-
+# ----------------------------------------------------------------------
+# Output
+# ----------------------------------------------------------------------
 
 REPORT_CSS = """
 :root {
@@ -367,19 +425,34 @@ tr.reviewed td:first-child { box-shadow: inset 3px 0 0 var(--human); }
 pre { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: .9rem 1rem; overflow-x: auto; font-size: .9rem; }
 ul.plain { padding-left: 1.2rem; max-width: 42rem; }
 footer { margin-top: 3rem; color: var(--muted); font-size: .9rem; }
+nav { margin-bottom: 1.5rem; font-size: .95rem; }
+.scenarios { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); gap: 1rem; margin: 1.25rem 0; }
+.scenario { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 1rem 1.1rem; }
+.scenario h3 { font-family: var(--serif); font-size: 1.2rem; margin: 0 0 .35rem; }
+.scenario p { margin: .25rem 0; }
+.compare td { white-space: normal; }
+.table-wrap + p { margin-top: .9rem; }
+.compare th[scope=row] { color: var(--ink); white-space: nowrap; }
 """
 
 
-def render_html(results: Dict[str, Any]) -> str:
-    """Render a self-contained HTML review record for this run."""
-    e = html.escape
-    rows = results["rows"]
-    prov = results["provenance"]
+def overrides_phrase(n: int) -> str:
+    return {0: "in no cases", 1: "once", 2: "twice"}.get(n, f"{n} times")
+
+
+def counts(res: Dict[str, Any]) -> Dict[str, int]:
+    rows = res["rows"]
     reviewed = [r for r in rows if r["route"] == "human review"]
-    overrides = sum(r["override"] for r in reviewed)
-    times = {0: "in no cases", 1: "once", 2: "twice"}.get(overrides, f"{overrides} times")
-    types = results["event_types"]
-    k = results["tamper_index"]
+    return {
+        "total": len(rows),
+        "automated": len(rows) - len(reviewed),
+        "reviewed": len(reviewed),
+        "overrides": sum(r["override"] for r in reviewed),
+    }
+
+
+def provenance_line(prov: Dict[str, Any]) -> str:
+    e = html.escape
 
     def link(text: str, url: Any) -> str:
         return f'<a href="{e(url)}">{e(text)}</a>' if url else e(text)
@@ -387,9 +460,43 @@ def render_html(results: Dict[str, Any]) -> str:
     source = [f"commit {link(prov['commit'], prov['commit_url'])}"]
     if prov["run_label"]:
         source.append(link(prov["run_label"], prov["run_url"]))
-    provenance_line = (
-        f"Generated from {' in '.join(source)} on {e(prov['generated'])}."
-    )
+    return f"Generated from {' in '.join(source)} on {e(prov['generated'])}."
+
+
+def page(title: str, body: str) -> str:
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{html.escape(title)}</title>
+<style>{REPORT_CSS}</style>
+</head>
+<body>
+<main>
+{body}
+<footer>Responsible AI Toolkit is experimental open-source software under the Apache License 2.0.</footer>
+</main>
+</body>
+</html>
+"""
+
+
+SYNTHETIC_NOTICE = (
+    '<p class="notice">All data here is synthetic, generated with fixed seeds. '
+    "These pages show what the software did on that data. They are not a model "
+    "validation, a deployment, or evidence of use by any institution.</p>"
+)
+
+
+def render_scenario_html(res: Dict[str, Any], prov: Dict[str, Any]) -> str:
+    """Render a self-contained HTML review record for one scenario."""
+    e = html.escape
+    sc = res["scenario"]
+    rows = res["rows"]
+    c = counts(res)
+    types = res["event_types"]
+    k = res["tamper_index"]
 
     chain = "".join(f'<li class="{e(t)}" title="Entry {i + 1}: {e(t)}"></li>'
                     for i, t in enumerate(types))
@@ -405,7 +512,7 @@ def render_html(results: Dict[str, Any]) -> str:
             decision += ' <span class="override">(override)</span>'
         decision_rows.append(
             f'<tr class="{"reviewed" if r["route"] == "human review" else ""}">'
-            f"<td>{e(r['application_ref'])}</td>"
+            f"<td>{e(r['record_ref'])}</td>"
             f"<td>{e(r['model_recommendation'])}</td>"
             f'<td class="num">{r["confidence"]:.2f}</td>'
             f"<td>{e(', '.join(r['policy_findings']) or 'none')}</td>"
@@ -415,10 +522,9 @@ def render_html(results: Dict[str, Any]) -> str:
         )
 
     control_rows = []
-    for label, outcome in results["controls"]:
-        accepted = outcome == "Accepted"
+    for label, outcome in res["controls"]:
         verdict, _, reason = outcome.partition(": ")
-        css = "result-ok" if accepted else "result-no"
+        css = "result-ok" if outcome == "Accepted" else "result-no"
         detail = f"<br>{e(reason)}" if reason else ""
         control_rows.append(
             f'<tr><td>{e(label)}</td><td><span class="{css}">{e(verdict)}</span>{detail}</td></tr>'
@@ -426,35 +532,22 @@ def render_html(results: Dict[str, Any]) -> str:
 
     chain_status = (
         f'<span class="status ok">All {len(types)} entries verified.</span>'
-        if results["chain_verified"]
+        if res["chain_verified"]
         else '<span class="status bad">Verification failed.</span>'
     )
     edited_status = (
         f'<span class="status bad">Verification failed at entry {k + 1}.</span>'
-        if not results["tampered_copy_verified"]
+        if not res["tampered_copy_verified"]
         else '<span class="status bad">Edited copy was not detected.</span>'
     )
+    rules_word = {2: "two", 3: "three"}.get(res["rule_count"], str(res["rule_count"]))
 
-    repo_link = (
-        f'<p>Source: {link("Responsible AI Toolkit on GitHub", prov["repo_url"])}.</p>'
-        if prov["repo_url"] else ""
-    )
-
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Model review record: synthetic lending demo</title>
-<style>{REPORT_CSS}</style>
-</head>
-<body>
-<main>
+    body = f"""<nav><a href="index.html">All demo scenarios</a></nav>
 <h1>Model review record</h1>
-<p class="provenance">Synthetic lending demo of the Responsible AI Toolkit. {provenance_line}</p>
-<p class="notice">All data here is synthetic, generated with a fixed seed ({SEED}). This page shows what the software did on that data. It is not a model validation, a deployment, or evidence of use by any institution.</p>
+<p class="provenance">{e(sc.title)}, a synthetic demo of the Responsible AI Toolkit. {provenance_line(prov)}</p>
+{SYNTHETIC_NOTICE}
 
-<p class="lede">{len(rows)} model decisions were checked against two rules. {len(rows) - len(reviewed)} passed and were automated. {len(reviewed)} failed a rule and went to a human reviewer, who overrode the model {times}. Every step was written to a hash-chained audit log.</p>
+<p class="lede">{c['total']} model decisions were checked against {rules_word} rules. {c['automated']} passed and were automated. {c['reviewed']} failed a rule and went to a human reviewer, who overrode the model {overrides_phrase(c['overrides'])}. Every step was written to a hash-chained audit log.</p>
 
 <h2>Audit record</h2>
 <p>Each block is one log entry, in order. Each entry's hash covers its contents and the entry before it, so an edit anywhere breaks verification from that point.</p>
@@ -468,20 +561,20 @@ def render_html(results: Dict[str, Any]) -> str:
 </ul>
 </div>
 <div class="chain-row">
-<p>A copy of the same log with one value changed: the model confidence for {e(TAMPER_TARGET)}, edited to 0.99. {edited_status} Entries after that point are not verified.</p>
+<p>A copy of the same log with one value changed: the model confidence for {e(sc.tamper_target)}, edited to 0.99. {edited_status} Entries after that point are not verified.</p>
 <ul class="chain" aria-label="Edited copy of the audit log">{"".join(edited)}</ul>
 <ul class="legend">
 <li><span style="background:var(--broken)"></span>Edited entry, hash mismatch</li>
 <li><span style="background:repeating-linear-gradient(135deg, var(--unchecked) 0 3px, transparent 3px 6px)"></span>Not verified</li>
 </ul>
 </div>
-<p>Chain head hash: <code>{e(results["head_hash"])}</code>. Keeping this value somewhere separate from the log makes later removal of entries detectable.</p>
+<p>Chain head hash: <code>{e(res["head_hash"])}</code>. Keeping this value somewhere separate from the log makes later removal of entries detectable.</p>
 
 <h2>Decisions</h2>
-<p>Rules: model confidence of at least 0.60, and required inputs present (debt-to-income, credit history). Thresholds are illustrative configuration values, not legal or supervisory standards.</p>
+<p>Rules: {e(sc.rules_text)}. Thresholds are illustrative configuration values, not legal or supervisory standards.</p>
 <div class="table-wrap">
 <table>
-<thead><tr><th>Application</th><th>Model</th><th>Confidence</th><th>Policy findings</th><th>Route</th><th>Reviewer</th><th>Reviewer decision</th></tr></thead>
+<thead><tr><th>{e(sc.record_label)}</th><th>Model</th><th>Confidence</th><th>Policy findings</th><th>Route</th><th>Reviewer</th><th>Reviewer decision</th></tr></thead>
 <tbody>{"".join(decision_rows)}</tbody>
 </table>
 </div>
@@ -503,24 +596,165 @@ def render_html(results: Dict[str, Any]) -> str:
 <li>Passing these checks does not establish compliance with any law, regulation, or guidance.</li>
 </ul>
 
-<h2>Reproduce this run</h2>
+<p>Raw output: <a href="{sc.key}_decisions.json">{sc.key}_decisions.json</a> and <a href="{sc.key}_audit_log.json">{sc.key}_audit_log.json</a>.</p>
+"""
+    return page(f"Model review record: {sc.title} (synthetic)", body)
+
+
+def comparison_rows(results: List[Dict[str, Any]]) -> List[Tuple[str, List[str]]]:
+    """Rows comparing the scenarios, built from each run's configuration and results."""
+    def rules(res: Dict[str, Any]) -> str:
+        sc = res["scenario"]
+        extra = len(sc.extra_policies)
+        text = "2 built-in rules"
+        return text + (f" and {extra} custom rule{'s' if extra > 1 else ''}" if extra else "")
+
+    rows = [
+        ("Audit logging", ["AuditLogger, unchanged" for _ in results]),
+        ("Policy checks", [f"PolicyEngine, unchanged; {rules(r)}" for r in results]),
+        ("Human review", [f"HITLOrchestrator, unchanged; reviewers with role \u201c{r['scenario'].category}\u201d" for r in results]),
+        ("Confidence threshold", [f"{r['scenario'].confidence_threshold:.2f}" for r in results]),
+        ("Required inputs", [", ".join(r["scenario"].required_fields) for r in results]),
+        ("Outcome", [
+            f"{counts(r)['automated']} automated, {counts(r)['reviewed']} reviewed, "
+            f"{counts(r)['overrides']} overrides" for r in results
+        ]),
+        ("Reviewer controls", [
+            f"{sum(1 for (lbl, out), exp in zip(r['controls'], ['Rejected', 'Rejected', 'Accepted', 'Rejected']) if out.split(':')[0] == exp)} of 4 as expected"
+            for r in results
+        ]),
+        ("Audit chain", [
+            f"{r['audit_entries']} entries verified; edit "
+            f"{'detected' if not r['tampered_copy_verified'] else 'NOT detected'}"
+            for r in results
+        ]),
+    ]
+    return rows
+
+
+def render_index_html(results: List[Dict[str, Any]], prov: Dict[str, Any]) -> str:
+    e = html.escape
+    cards = []
+    for res in results:
+        sc = res["scenario"]
+        c = counts(res)
+        cards.append(
+            f'<div class="scenario"><h3><a href="{sc.key}.html">{e(sc.title)}</a></h3>'
+            f"<p>{c['total']} model decisions. {c['automated']} automated, {c['reviewed']} sent to a "
+            f"reviewer, who overrode the model {overrides_phrase(c['overrides'])}.</p>"
+            f'<p><a href="{sc.key}.html">Open the review record</a></p></div>'
+        )
+    head = "".join(f"<th scope=\"col\">{e(r['scenario'].title)}</th>" for r in results)
+    body_rows = "".join(
+        f'<tr><th scope="row">{e(label)}</th>' + "".join(f"<td>{e(v)}</td>" for v in values) + "</tr>"
+        for label, values in comparison_rows(results)
+    )
+    repo = (f'<p>Source: <a href="{e(prov["repo_url"])}">Responsible AI Toolkit on GitHub</a>.</p>'
+            if prov["repo_url"] else "")
+    body = f"""<h1>One toolkit, two review workflows</h1>
+<p class="provenance">Synthetic demo of the Responsible AI Toolkit. {provenance_line(prov)}</p>
+{SYNTHETIC_NOTICE}
+
+<p class="lede">The same audit, policy, and human-review components run a consumer lending workflow and a small-business insurance workflow. Only the configuration differs: the data, rule settings, and reviewer roles.</p>
+
+<div class="scenarios">{"".join(cards)}</div>
+
+<h2>What stayed the same and what changed</h2>
+<p>Built from each run's configuration and results. Both runs use the same toolkit code.</p>
+<div class="table-wrap">
+<table class="compare">
+<thead><tr><th></th>{head}</tr></thead>
+<tbody>{body_rows}</tbody>
+</table>
+</div>
+<p>Scenario-specific code in this demo is limited to the synthetic data, the rule settings, one custom insurance rule written with the toolkit's <code>Policy</code> class, the reviewer roles, and a fixed rule standing in for reviewer judgment.</p>
+
+<h2>Reproduce these runs</h2>
 <pre>python -m pip install -e ".[dev]"
 python examples/model_review_demo.py demo_output</pre>
 <p>The decisions, controls, and audit results match on every run. Timestamps, entry IDs, and hashes differ.</p>
-<p>Raw output: <a href="decisions.json">decisions.json</a> and <a href="audit_log.json">audit_log.json</a>.</p>
-{repo_link}
-<footer>Responsible AI Toolkit is experimental open-source software under the Apache License 2.0.</footer>
-</main>
-</body>
-</html>
+{repo}
 """
+    return page("Responsible AI Toolkit: synthetic review demos", body)
+
+
+def render_summary(results: List[Dict[str, Any]], prov: Dict[str, Any]) -> str:
+    lines = [
+        "# Model review demo (synthetic data)",
+        "",
+        f"Generated by `examples/model_review_demo.py` at commit `{prov['commit']}` on {prov['generated']}.",
+        "",
+        "All data is synthetic (fixed seeds). This output shows software behavior only. "
+        "It is not a model validation, a deployment, or evidence of use by any institution.",
+        "",
+        "## Same toolkit, two workflows",
+        "",
+        "| | " + " | ".join(r["scenario"].title for r in results) + " |",
+        "| --- |" + " --- |" * len(results),
+    ]
+    for label, values in comparison_rows(results):
+        lines.append(f"| {label} | " + " | ".join(values) + " |")
+    lines += ["", "Both runs use the same toolkit code.", ""]
+
+    for res in results:
+        sc = res["scenario"]
+        c = counts(res)
+        lines += [
+            f"## {sc.title}",
+            "",
+            f"Rules: {sc.rules_text}.",
+            "",
+            f"| {sc.record_label} | Model recommendation | Confidence | Policy findings | Route | Reviewer | Review decision |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for r in res["rows"]:
+            lines.append(
+                f"| {r['record_ref']} | {r['model_recommendation']} | {r['confidence']:.2f} | "
+                f"{', '.join(r['policy_findings']) or 'none'} | {r['route']} | "
+                f"{r['reviewer'] or '-'} | "
+                f"{(r['review_decision'] or '-') + (' (override)' if r['override'] else '')} |"
+            )
+        lines += [
+            "",
+            f"{sc.record_label}s: {c['total']}. Automated: {c['automated']}. "
+            f"Routed to human review: {c['reviewed']}. Reviewer overrides of the model: {c['overrides']}.",
+            "",
+            "| Review control attempt | Result |",
+            "| --- | --- |",
+        ]
+        lines += [f"| {label} | {outcome} |" for label, outcome in res["controls"]]
+        lines += [
+            "",
+            f"Audit entries: {res['audit_entries']}. Chain verification: "
+            f"{'passed' if res['chain_verified'] else 'FAILED'}. Chain head hash: `{res['head_hash']}`.",
+            "",
+            f"Copy with {sc.tamper_target}'s confidence edited: verification "
+            f"{'passed (unexpected)' if res['tampered_copy_verified'] else 'failed, as expected'}.",
+            "",
+        ]
+    all_ok = all(r["all_checks_as_expected"] for r in results)
+    lines.append(f"All demo checks as expected: {'yes' if all_ok else 'NO'}.")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def main() -> int:
     output_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("demo_output")
-    results = run(output_dir)
-    print((output_dir / "summary.md").read_text())
-    return 0 if results["all_checks_as_expected"] else 1
+    output_dir.mkdir(parents=True, exist_ok=True)
+    prov = provenance()
+    results = [run_scenario(sc) for sc in SCENARIOS]
+
+    for res in results:
+        key = res["scenario"].key
+        (output_dir / f"{key}.html").write_text(render_scenario_html(res, prov), encoding="utf-8")
+        (output_dir / f"{key}_decisions.json").write_text(json.dumps(res["rows"], indent=2))
+        (output_dir / f"{key}_audit_log.json").write_text(res["audit"].export_json())
+    (output_dir / "index.html").write_text(render_index_html(results, prov), encoding="utf-8")
+    summary = render_summary(results, prov)
+    (output_dir / "summary.md").write_text(summary)
+
+    print(summary)
+    return 0 if all(r["all_checks_as_expected"] for r in results) else 1
 
 
 if __name__ == "__main__":
