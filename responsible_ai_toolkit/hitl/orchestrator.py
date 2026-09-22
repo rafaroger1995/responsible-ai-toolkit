@@ -278,6 +278,9 @@ class HITLOrchestrator:
 
         case = self._cases[internal_id]
 
+        if case.status == CaseStatus.COMPLETED:
+            raise ValueError("Cannot record another decision on a completed case.")
+
         if reviewer_id not in self._reviewers:
             raise ValueError(f"Reviewer '{reviewer_id}' is not registered.")
 
