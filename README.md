@@ -2,7 +2,7 @@
 
 **Reusable components for evaluating model behavior, organizing human review, and documenting AI governance in financial services.**
 
-Responsible AI Toolkit is an open-source reference implementation bringing together fairness evaluation, drift monitoring, audit logging, human review workflows, configurable policy checks, and governance reporting.
+Responsible AI Toolkit is an open-source reference implementation bringing together audit logging, human review workflows, drift monitoring, configurable policy checks, governance reporting, and group-level outcome metrics.
 
 The project focuses on workflows relevant to U.S. community banks and small and mid-sized insurers. Its objective is to make selected governance practices easier to implement, inspect, and adapt through shared software components and documented examples.
 
@@ -18,14 +18,14 @@ The intended benefit is to reduce duplicated implementation effort while preserv
 
 ## Components
 
-| Component                                        | Role                                                                                                                 |
-| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| [Fairness](responsible_ai_toolkit/fairness/)     | Group-based fairness metrics and bias-monitoring functions.                                                          |
-| [Drift](responsible_ai_toolkit/drift/)           | Distribution comparisons using measures such as population stability index, KL divergence, and Wasserstein distance. |
-| [Audit](responsible_ai_toolkit/audit/)           | Event logging and hash-chain consistency checks.                                                                     |
-| [Human review](responsible_ai_toolkit/hitl/)     | Review cases, reviewer assignments, and escalation workflows.                                                        |
-| [Policy](responsible_ai_toolkit/policy/)         | Configurable checks evaluated against supplied metrics and inputs.                                                   |
-| [Governance](responsible_ai_toolkit/governance/) | Reporting functions that bring available findings together for practitioner review.                                  |
+| Component | Role |
+| --- | --- |
+| [Audit](responsible_ai_toolkit/audit/) | Event logging with hash-chain verification of stored entries. |
+| [Human review](responsible_ai_toolkit/hitl/) | Review cases, reviewer assignments, authorization checks, and escalation workflows. |
+| [Drift](responsible_ai_toolkit/drift/) | Distribution comparisons using measures such as population stability index, KL divergence, and Wasserstein distance. |
+| [Policy](responsible_ai_toolkit/policy/) | Configurable checks evaluated against supplied metrics and inputs. |
+| [Governance](responsible_ai_toolkit/governance/) | Reporting functions that bring available findings together for practitioner review. |
+| [Fairness](responsible_ai_toolkit/fairness/) | Group-level outcome comparison metrics. |
 
 These descriptions identify the components’ roles. Their effectiveness and suitability depend on the implementation, configuration, data, and operating environment.
 
@@ -73,15 +73,11 @@ Passing tests demonstrates the behavior covered by those tests in the recorded e
 
 ## Interpreting results
 
-### Fairness evaluation
+### Audit records
 
-Fairness metrics describe particular relationships in the evaluated data. Their interpretation depends on the decision context, metric definition, group sizes, data quality, and available outcomes.
+Hash-chain verification checks record consistency within the mechanism’s limits. It does not establish the truth or completeness of recorded information, and hash chaining alone does not provide immutable storage.
 
-Values such as `0.80` in examples are illustrative thresholds, not universal legal standards for lending or insurance. A metric result alone does not establish the presence or absence of unlawful discrimination.
-
-### Drift monitoring
-
-A monitoring threshold such as `PSI > 0.25` is an example configuration value. Exceeding it should prompt investigation in the context of model purpose, performance, materiality, and institutional policy. It does not automatically establish that a model is invalid or that revalidation is legally required.
+Operational assurance requires appropriate access controls, persistence, retention, and independently protected integrity references.
 
 ### Human review and policy checks
 
@@ -89,19 +85,23 @@ Configured rules and recorded review decisions support a governance workflow. Th
 
 A policy failure identifies a finding under the configured rule. A passing result does not constitute a complete compliance assessment. Missing or insufficient evidence requires separate attention.
 
-### Audit records
+### Drift monitoring
 
-Hash-chain verification checks record consistency within the mechanism’s limits. It does not establish the truth or completeness of recorded information, and hash chaining alone does not provide immutable storage.
+A monitoring threshold such as `PSI > 0.25` is an example configuration value. Exceeding it should prompt investigation in the context of model purpose, performance, materiality, and institutional policy. It does not automatically establish that a model is invalid or that revalidation is legally required.
 
-Operational assurance requires appropriate access controls, persistence, retention, and independently protected integrity references.
+### Fairness metrics
+
+Group-level metrics describe particular relationships in the evaluated data. Their interpretation depends on the decision context, metric definition, group sizes, data quality, and available outcomes.
+
+Values such as `0.80` in examples are illustrative thresholds, not universal legal standards for lending or insurance. A metric result alone does not establish the presence or absence of unlawful discrimination.
 
 ## Governance references
 
 The following sources inform the project’s governance context. References do not imply complete implementation, certification, or endorsement.
 
-| Source                                                                                                                 | Scope                                                                                                                                                                                                                                               |
-| ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)                             | A voluntary framework that can inform AI risk evaluation, oversight, and documentation.                                                                                                                                                             |
+| Source | Scope |
+| --- | --- |
+| [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework) | A voluntary framework that can inform AI risk evaluation, oversight, and documentation. |
 | [Revised interagency model-risk guidance, SR 26-2](https://www.federalreserve.gov/supervisionreg/srletters/SR2602.htm) | Nonbinding supervisory guidance issued April 17, 2026, superseding SR 11-7 and SR 21-8. Most relevant to banking organizations above $30 billion in assets, with potential relevance to certain smaller banks with significant model-risk exposure. |
 
 The [SR 26-2 attachment](https://www.federalreserve.gov/supervisionreg/srletters/SR2602a1.pdf) excludes generative and agentic AI from its scope. It is not a universal requirement for community banks, credit unions, or insurers.
@@ -116,6 +116,13 @@ Evaluation should cover input validation, missing-data behavior, metric suitabil
 
 Reuse across institutions is an intended design objective. Demonstrating it requires documenting which components remain unchanged, which need configuration or code changes, and what manual work is required. The presence of multiple examples alone does not establish successful transfer or adoption.
 
+## Project history
+
+* **Through April 15, 2026:** Initial components, examples, and CI workflow.
+* **September 22, 2026:** Corrections and regression tests for missing drift inputs, empty policy evaluations, policy evaluation statuses, export stability, reviewer authorization, repeat review decisions, and audit-chain integrity; removal of compliance and framework-alignment claims from code documentation.
+
+Dates reflect the repository's commit history.
+
 ## Planned development
 
 The following are development priorities, not completed capabilities:
@@ -123,7 +130,6 @@ The following are development priorities, not completed capabilities:
 * A versioned, project-defined assurance-record schema linking model identity, evaluation inputs, policy versions, findings, review decisions, exceptions, and remediation.
 * Reproducible synthetic profiles for evaluating shared components across lending and insurance workflows.
 * An adaptation report documenting shared code, configuration changes, implementation effort, and limitations.
-* Additional tests for missing inputs, empty policies, unauthorized review, and record-integrity failures.
 * A practitioner review guide with version-specific reproduction instructions.
 * Versioned releases documenting tested behavior and known limitations.
 
