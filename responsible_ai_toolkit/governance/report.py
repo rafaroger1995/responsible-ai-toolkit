@@ -230,7 +230,18 @@ class GovernanceReporter:
             },
             "policy_compliance": {
                 "total_evaluations": len(self._policy_reports),
-                "current_status": self.create_snapshot().policy_status,
+                 "current_status": (
+                     "not_evaluated"
+                     if not self._policy_reports or not self._policy_reports[-1].results
+                     else "evaluation_error"
+                     if any(
+                        result.error is not None
+                        for result in self._policy_reports[-1].results
+                     )
+                    else "checks_passed"
+                    if self._policy_reports[-1].all_passed
+                    else "checks_failed"
+                ),
                 "evaluations": [
                     {
                         "pass_rate": r.pass_rate,
