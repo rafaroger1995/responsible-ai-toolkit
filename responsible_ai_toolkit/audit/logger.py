@@ -1,30 +1,35 @@
 """
-Tamper-evident, append-only audit logging for AI governance.
+Audit logging with SHA-256 hash chaining.
 
-Provides an immutable record of every AI decision — model inputs,
-outputs, policy checks, human interventions, and configuration
-changes — using SHA-256 hash chaining and timestamp anchoring.
+Records AI-related events (model predictions, policy checks, human review
+decisions, fairness evaluations, drift alerts, and escalations) as entries
+linked by SHA-256 hashes. Each entry's hash covers all of its stored fields
+and the previous entry's hash, so ``verify_chain()`` detects edits to
+entries, removal of entries from within the chain, and reordering.
 
-Designed to satisfy regulatory audit requirements in financial services:
-  - FDIC/OCC model risk management (SR 11-7)
-  - Interagency third-party risk management guidance
-  - Fair lending examination evidence requirements
-  - SOC 2 Type II audit trail controls
-
-Every log entry is chained to the previous entry via a cryptographic
-hash, making it computationally infeasible to tamper with historical
-records without detection.
+Limitations:
+  - Entries are held in memory. Persistence, access control, and
+    retention must be provided by the system that uses this logger.
+  - The hash chain uses no secret key. Anyone able to modify the log can
+    also recompute every hash, so tamper evidence depends on protecting
+    the log or recording a recent entry hash somewhere independent.
+  - Removing entries from the end of the log cannot be detected without
+    such an independent reference.
+  - Using this logger does not establish regulatory compliance. Whether
+    its records support a particular audit or examination depends on the
+    institution's own controls, configuration, and obligations.
 
 Usage:
     >>> from responsible_ai_toolkit.audit import AuditLogger
     >>> logger = AuditLogger(system_id="lending-model-v2")
-    >>> logger.log_prediction(
+    >>> entry = logger.log_prediction(
     ...     model_id="credit-score-v2",
     ...     input_data={"income": 75000, "credit_score": 720},
     ...     output={"approved": True, "score": 0.87},
     ...     metadata={"applicant_id": "A-12345"},
     ... )
-    >>> assert logger.verify_chain()
+    >>> logger.verify_chain()
+    True
 """
 
 from __future__ import annotations
@@ -56,7 +61,7 @@ class EventType(str, Enum):
 
 @dataclass
 class AuditEntry:
-    """A single immutable audit log entry with hash chain linkage."""
+    """A single audit log entry with hash chain linkage."""
 
     entry_id: str
     sequence_number: int
@@ -76,19 +81,26 @@ class AuditEntry:
 
 
 class AuditLogger:
-    """Append-only audit logger with SHA-256 hash chaining.
+    """Audit logger with SHA-256 hash chaining.
+
+    The public methods only add entries; none edit or delete them.
 
     Parameters
     ----------
     system_id : str
         Identifier for the AI system being audited (e.g., "lending-model-v2").
     hash_algorithm : str, default "sha256"
-        Hash algorithm for chain integrity.
+        Hash algorithm for chain integrity. Only "sha256" is supported;
+        any other value raises ``ValueError``.
     """
 
     GENESIS_HASH = "0" * 64  # Genesis block previous hash
 
     def __init__(self, system_id: str, hash_algorithm: str = "sha256") -> None:
+        if hash_algorithm != "sha256":
+            raise ValueError(
+                f"Unsupported hash algorithm '{hash_algorithm}'; only 'sha256' is supported."
+            )
         self.system_id = system_id
         self.hash_algorithm = hash_algorithm
         self._entries: List[AuditEntry] = []
@@ -363,7 +375,10 @@ class AuditLogger:
         )
 
     def export_evidence_package(self) -> Dict[str, Any]:
-        """Generate a compliance evidence package for regulatory examination.
+        """Export the log with a chain-verification result for review.
+
+        The result reflects only the checks performed by ``verify_chain()``;
+        it is not a compliance determination.
 
         Returns a structured dict containing:
           - System identification
