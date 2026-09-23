@@ -1,22 +1,24 @@
 """
-Governance reporting and compliance evidence generation.
+Governance reporting: one structured summary of a model's review records.
 
-Aggregates outputs from fairness evaluations, drift monitoring,
-audit logs, HITL workflows, and policy checks into structured
-compliance reports suitable for regulatory examinations.
+Collects outputs from fairness evaluations, drift monitoring, policy
+checks, human-review statistics, and analyst notes into a single summary
+that practitioners can read, share, and keep with their own records.
 
-Designed to generate the evidence packages required by:
-  - FDIC/OCC model risk management examinations
-  - Fair lending regulatory reviews (ECOA, FHA)
-  - SOC 2 Type II audit evidence requirements
-  - NIST AI RMF compliance documentation
+What the summary does and does not show:
+  - It reports the results the toolkit's components produced. It adds no
+    independent assessment of the model, the data, or the process.
+  - Status values such as "checks_passed" describe the configured checks
+    only. They are not compliance determinations under any law,
+    regulation, supervisory guidance, or audit standard.
+  - Whether the summary is useful for a particular review, audit, or
+    examination depends on the institution's own controls and obligations.
 
 Usage:
     >>> from responsible_ai_toolkit.governance import GovernanceReporter
     >>> reporter = GovernanceReporter(system_id="lending-model-v2")
-    >>> reporter.add_fairness_report(fairness_report)
-    >>> reporter.add_drift_report(drift_report)
-    >>> evidence = reporter.generate_evidence_package()
+    >>> reporter.add_drift_report(drift_report)          # doctest: +SKIP
+    >>> summary = reporter.generate_evidence_package()   # doctest: +SKIP
 """
 
 from __future__ import annotations
@@ -33,25 +35,30 @@ from responsible_ai_toolkit.policy.engine import EvaluationReport
 
 @dataclass
 class GovernanceSnapshot:
-    """A point-in-time snapshot of governance status."""
+    """A point-in-time snapshot of review status."""
 
     timestamp: float
     timestamp_iso: str
-    fairness_status: str   # "pass", "warning", "violation"
-    drift_status: str      # "stable", "moderate", "significant"
-    policy_status: str     # "compliant", "violations_detected"
+    fairness_status: str   # "pass", "warning", "violation", "no_data"
+    drift_status: str      # e.g. "no_significant_drift", "moderate_drift", "significant_drift", "no_data"
+    policy_status: str     # "checks_passed", "checks_failed", "evaluation_error", "not_evaluated"
     hitl_sla_rate: Optional[float] = None
     hitl_override_rate: Optional[float] = None
     details: Dict[str, Any] = field(default_factory=dict)
 
 
+def _is_significant_drift(report: DriftReport) -> bool:
+    """True when the drift interpretation is the highest band."""
+    return report.psi_interpretation.lower().startswith("significant")
+
+
 class GovernanceReporter:
-    """Aggregate governance data into compliance evidence packages.
+    """Collect review records for one AI system into a structured summary.
 
     Parameters
     ----------
     system_id : str
-        Identifier for the AI system being governed.
+        Identifier for the AI system being reviewed.
     organization : str, optional
         Organization name for report headers.
     """
@@ -87,7 +94,7 @@ class GovernanceReporter:
         self._policy_reports.append(report)
 
     def add_note(self, author: str, content: str, category: str = "general") -> None:
-        """Add an analyst note or observation to the governance record."""
+        """Add an analyst note or observation to the record."""
         self._notes.append({
             "author": author,
             "content": content,
@@ -95,6 +102,19 @@ class GovernanceReporter:
             "timestamp": time.time(),
             "timestamp_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
+
+    # ------------------------------------------------------------------
+    # Status helpers
+    # ------------------------------------------------------------------
+
+    def _policy_status(self) -> str:
+        """Status of the most recent policy evaluation."""
+        if not self._policy_reports or not self._policy_reports[-1].results:
+            return "not_evaluated"
+        latest = self._policy_reports[-1]
+        if any(result.error is not None for result in latest.results):
+            return "evaluation_error"
+        return "checks_passed" if latest.all_passed else "checks_failed"
 
     # ------------------------------------------------------------------
     # Snapshot creation
@@ -105,7 +125,7 @@ class GovernanceReporter:
         hitl_sla_rate: Optional[float] = None,
         hitl_override_rate: Optional[float] = None,
     ) -> GovernanceSnapshot:
-        """Create a point-in-time governance status snapshot."""
+        """Create a point-in-time status snapshot."""
         now = time.time()
 
         # Determine fairness status
@@ -127,25 +147,12 @@ class GovernanceReporter:
         else:
             drift_status = "no_data"
 
-        # Determine policy status
-        if not self._policy_reports or not self._policy_reports[-1].results:
-            policy_status = "not_evaluated"
-        else:
-            latest_policy = self._policy_reports[-1]
-            policy_status = (
-                "evaluation_error"
-                if any(result.error is not None for result in latest_policy.results)
-                else "checks_passed"
-                if latest_policy.all_passed
-                else "checks_failed"
-            )
-
         snapshot = GovernanceSnapshot(
             timestamp=now,
             timestamp_iso=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
             fairness_status=fairness_status,
             drift_status=drift_status,
-            policy_status=policy_status,
+            policy_status=self._policy_status(),
             hitl_sla_rate=hitl_sla_rate,
             hitl_override_rate=hitl_override_rate,
             details={
@@ -167,20 +174,22 @@ class GovernanceReporter:
         return snapshot
 
     # ------------------------------------------------------------------
-    # Evidence package generation
+    # Summary generation
     # ------------------------------------------------------------------
 
     def generate_evidence_package(self) -> Dict[str, Any]:
-        """Generate a complete compliance evidence package.
+        """Generate a structured summary of the collected review records.
 
-        This produces a structured document suitable for regulatory
-        examination, containing:
+        Contains:
           - System identification and metadata
           - Fairness evaluation history and current status
           - Drift monitoring history and current status
-          - Policy compliance history and current status
-          - Governance snapshots over time
+          - Policy check history and current status
+          - Snapshots over time
           - Analyst notes and observations
+
+        The ``policy_compliance`` key name is kept for compatibility; its
+        status reflects only the configured policy checks.
         """
         now = time.time()
 
@@ -190,7 +199,11 @@ class GovernanceReporter:
                 "organization": self.organization,
                 "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
                 "toolkit_version": "0.1.0",
-                "report_type": "Governance Evidence Package",
+                "report_type": "Governance summary",
+                "scope_note": (
+                    "Reports results produced by the configured toolkit checks. "
+                    "Not a compliance determination."
+                ),
             },
             "executive_summary": self._generate_executive_summary(),
             "fairness": {
@@ -230,18 +243,7 @@ class GovernanceReporter:
             },
             "policy_compliance": {
                 "total_evaluations": len(self._policy_reports),
-                 "current_status": (
-                     "not_evaluated"
-                     if not self._policy_reports or not self._policy_reports[-1].results
-                     else "evaluation_error"
-                     if any(
-                        result.error is not None
-                        for result in self._policy_reports[-1].results
-                     )
-                    else "checks_passed"
-                    if self._policy_reports[-1].all_passed
-                    else "checks_failed"
-                ),
+                "current_status": self._policy_status(),
                 "evaluations": [
                     {
                         "pass_rate": r.pass_rate,
@@ -269,14 +271,11 @@ class GovernanceReporter:
         return package
 
     def _generate_executive_summary(self) -> Dict[str, Any]:
-        """Generate an executive summary for the evidence package."""
+        """Generate the summary counts at the top of the package."""
         total_violations = sum(
             len(r.violations) for r in self._fairness_reports
         )
-        drift_alerts = sum(
-            1 for r in self._drift_reports
-            if "significant" in r.psi_interpretation.lower()
-        )
+        drift_alerts = sum(1 for r in self._drift_reports if _is_significant_drift(r))
         policy_failures = sum(
             len(r.violations) for r in self._policy_reports
         )
@@ -293,7 +292,7 @@ class GovernanceReporter:
         }
 
     def export_json(self, indent: int = 2) -> str:
-        """Export the evidence package as formatted JSON."""
+        """Export the summary as formatted JSON."""
         return json.dumps(
             self.generate_evidence_package(),
             indent=indent,
