@@ -31,5 +31,5 @@ jobs:
 
       - name: Run examples
         run: |
-          python examples/lending_fairness.py
+          python examples/lending_model_review.py
           python examples/insurance_underwriting.py
