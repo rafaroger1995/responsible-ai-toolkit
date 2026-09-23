@@ -1,10 +1,10 @@
 """
-Model review demo on synthetic lending, insurance, and fraud-alert data,
-with month-by-month drift monitoring of the lending model.
+Model review demo on synthetic lending and insurance data, with
+month-by-month drift monitoring of the lending model.
 
-Runs the same toolkit components, unchanged, on three synthetic scenarios:
-consumer lending decisions, small-business property insurance quotes, and
-transaction fraud alerts at a credit union. For each scenario it:
+Runs the same toolkit components on two illustrative synthetic
+configurations: consumer lending decisions and small-business property
+insurance quotes. For each configuration it:
 
   1. Records each model decision in a hash-chained audit log.
   2. Evaluates each decision against configurable policy checks.
@@ -156,34 +156,6 @@ def insurance_reviewer(record: Dict[str, Any]) -> Tuple[str, str]:
     return APPROVE, "Inputs complete and within underwriting guidelines."
 
 
-def fraud_records(seed: int) -> List[Dict[str, Any]]:
-    """Synthetic transaction alerts at a credit union with model outputs."""
-    rng = random.Random(seed)
-    records = []
-    for i in range(1, 13):
-        records.append({
-            "ref": f"TXN-{i:03d}",
-            "amount": rng.choice([180, 950, 2400, 6500, 12500, 18000]),
-            "channel": rng.choice(["card", "online transfer", "wire"]),
-            "account_age_days": rng.randint(5, 3000),
-            "device_known": rng.random() < 0.7,
-            "model_recommendation": "clear" if rng.random() < 0.65 else "hold",
-            "confidence": round(rng.uniform(0.50, 0.99), 2),
-        })
-    # One record with a missing input, to exercise the completeness check.
-    records[7]["account_age_days"] = None
-    return records
-
-
-def fraud_reviewer(record: Dict[str, Any]) -> Tuple[str, str]:
-    """Deterministic stand-in for a fraud analyst's judgment."""
-    if record["account_age_days"] is None:
-        return DECLINE, "Account details missing; hold until verified."
-    if not record["device_known"] and record["amount"] > 5000:
-        return DECLINE, "Large amount from an unrecognized device; hold and contact member."
-    return APPROVE, "Activity consistent with the member's history; release."
-
-
 SCENARIOS = [
     Scenario(
         key="lending",
@@ -242,40 +214,6 @@ SCENARIOS = [
             )
         ],
         decision_labels={APPROVE: "offer", DECLINE: "decline"},
-    ),
-    Scenario(
-        key="fraud",
-        title="Transaction fraud alerts",
-        short="fraud alerts at a credit union",
-        record_label="Alert",
-        category="fraud",
-        system_id="synthetic-fraud-model",
-        model_id="synthetic-transaction-model-v1",
-        seed=20260924,
-        reviewers=["analyst-a", "analyst-b"],
-        input_fields=("amount", "channel", "account_age_days", "device_known"),
-        required_fields=["account_age_days", "device_known"],
-        confidence_threshold=0.75,
-        positive_recommendation="clear",
-        make_records=fraud_records,
-        reviewer_rule=fraud_reviewer,
-        tamper_target="TXN-006",
-        rules_text=(
-            "model confidence of at least 0.75, required inputs present "
-            "(account age, device recognition), and transactions above "
-            "10,000 held for analyst review"
-        ),
-        extra_policies=[
-            Policy(
-                policy_id="large-transaction-review",
-                name="Large transaction review",
-                description="Transactions above 10,000 are held for analyst review.",
-                rule=lambda ctx: ctx.get("amount", 0) <= 10_000,
-                severity="warning",
-                category="fraud",
-            )
-        ],
-        decision_labels={APPROVE: "release", DECLINE: "hold"},
     ),
 ]
 
@@ -1138,6 +1076,7 @@ def render_index_html(results: List[Dict[str, Any]], prov: Dict[str, Any],
 </table>
 </div>
 <p>Scenario-specific code in this demo is limited to the synthetic data, the rule settings, one custom rule per scenario where needed (written with the toolkit's <code>Policy</code> class), the reviewer roles, and a fixed rule standing in for reviewer judgment.</p>
+<p>These are illustrative configurations on synthetic data. Running the same components under different settings shows how they are configured. It is not evidence of the effort needed to adapt them to a real institution's models, data, and procedures, which requires a separate, documented evaluation.</p>
 
 <h2>Reproduce these runs</h2>
 <pre>python -m pip install -e ".[dev]"
