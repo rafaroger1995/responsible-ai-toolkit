@@ -1,26 +1,35 @@
 """
-Model drift detection using statistical distance measures.
+Distribution drift measures for monitoring model inputs and outputs.
 
-Monitors distribution shifts between a reference (training/baseline)
-dataset and production data to detect when AI models may be producing
-unreliable predictions.  Essential for regulated financial services
-where model degradation can lead to biased lending decisions, inaccurate
-underwriting, or missed fraud.
+Compares a reference dataset (for example, scores from the period a model
+was validated on) with recent production data, and reports how far the
+distribution has shifted. A shift is a signal to investigate; it does not
+by itself show that a model's predictions have become unreliable.
 
-Implements three complementary drift metrics:
-  - **Population Stability Index (PSI)**: Industry-standard measure
-    used in credit risk model validation (OCC/Fed SR 11-7 guidance).
-  - **KL Divergence**: Information-theoretic measure of distribution
+Implements three complementary measures:
+  - **Population Stability Index (PSI)**: a binned measure widely used
+    in credit-risk model monitoring.
+  - **KL Divergence**: an information-theoretic measure of distribution
     shift, sensitive to tail behavior.
-  - **Wasserstein Distance**: Earth-mover's distance, robust to
-    non-overlapping supports.
+  - **Wasserstein Distance**: the earth mover's distance between the two
+    empirical distributions, in the units of the data.
+
+Production values outside the reference range are counted in the lowest
+or highest bin, so a shift beyond the reference range raises PSI and KL
+rather than being ignored.
+
+The default PSI thresholds (0.10 and 0.25) are common rules of thumb, not
+regulatory or supervisory standards. Set them to fit the model and the
+institution's own monitoring policy.
 
 Usage:
+    >>> import numpy as np
     >>> from responsible_ai_toolkit.drift import DriftMonitor
-    >>> monitor = DriftMonitor(reference=training_scores)
-    >>> report = monitor.evaluate(production_scores)
-    >>> if report["psi"] > 0.25:
-    ...     print("Significant drift detected — model review required")
+    >>> rng = np.random.default_rng(0)
+    >>> monitor = DriftMonitor(reference=rng.normal(0.0, 1.0, 5000))
+    >>> report = monitor.evaluate(rng.normal(1.0, 1.0, 5000))
+    >>> report.psi > 0.25
+    True
 """
 
 from __future__ import annotations
@@ -71,9 +80,9 @@ class DriftMonitor:
         (low, high) thresholds for PSI interpretation:
           - PSI < low: "No significant drift"
           - low <= PSI < high: "Moderate drift — monitor closely"
-          - PSI >= high: "Significant drift — model review required"
-        These thresholds align with standard model risk management
-        guidance (OCC/Fed SR 11-7).
+          - PSI >= high: "Significant drift — investigate"
+        These defaults are common rules of thumb. They are configuration
+        values, not regulatory or supervisory standards.
     """
 
     def __init__(
@@ -93,11 +102,31 @@ class DriftMonitor:
                 f"Reference data has {len(self.reference)} samples, "
                 f"but at least {self.n_bins} are required for {self.n_bins} bins."
             )
+        if not np.all(np.isfinite(self.reference)):
+            raise ValueError("Reference data contains missing or non-finite values.")
 
         # Pre-compute reference bin edges and proportions
         self._bin_edges = np.histogram_bin_edges(self.reference, bins=self.n_bins)
         ref_counts, _ = np.histogram(self.reference, bins=self._bin_edges)
         self._ref_proportions = ref_counts / ref_counts.sum()
+
+    # ------------------------------------------------------------------
+    # Input handling
+    # ------------------------------------------------------------------
+
+    def _validate_production(self, production: np.ndarray) -> np.ndarray:
+        production = np.asarray(production, dtype=float)
+        if production.size == 0:
+            raise ValueError("Production data is empty.")
+        if not np.all(np.isfinite(production)):
+            raise ValueError("Production data contains missing or non-finite values.")
+        return production
+
+    def _production_proportions(self, production: np.ndarray) -> np.ndarray:
+        """Bin production data, counting out-of-range values in the end bins."""
+        clipped = np.clip(production, self._bin_edges[0], self._bin_edges[-1])
+        prod_counts, _ = np.histogram(clipped, bins=self._bin_edges)
+        return prod_counts / prod_counts.sum()
 
     # ------------------------------------------------------------------
     # Population Stability Index
@@ -109,7 +138,8 @@ class DriftMonitor:
         PSI = Σ (P_i - Q_i) * ln(P_i / Q_i)
 
         where P_i is the production proportion and Q_i is the reference
-        proportion for bin i.
+        proportion for bin i. Production values below or above the
+        reference range are counted in the first or last bin.
 
         Returns
         -------
@@ -118,8 +148,8 @@ class DriftMonitor:
             Per-bin breakdown showing reference proportion, production
             proportion, and contribution to overall PSI.
         """
-        prod_counts, _ = np.histogram(production, bins=self._bin_edges)
-        prod_proportions = prod_counts / prod_counts.sum()
+        production = self._validate_production(production)
+        prod_proportions = self._production_proportions(production)
 
         # Add epsilon to avoid division by zero
         ref_adj = self._ref_proportions + self.epsilon
@@ -152,9 +182,12 @@ class DriftMonitor:
         """Compute KL divergence: D_KL(Production || Reference).
 
         KL(P || Q) = Σ P_i * ln(P_i / Q_i)
+
+        Production values outside the reference range are counted in the
+        first or last bin.
         """
-        prod_counts, _ = np.histogram(production, bins=self._bin_edges)
-        prod_proportions = prod_counts / prod_counts.sum()
+        production = self._validate_production(production)
+        prod_proportions = self._production_proportions(production)
 
         ref_adj = self._ref_proportions + self.epsilon
         prod_adj = prod_proportions + self.epsilon
@@ -174,8 +207,11 @@ class DriftMonitor:
 
         W_1(P, Q) = integral |F_P(x) - F_Q(x)| dx
 
-        Computed as the L1 distance between sorted empirical CDFs.
+        Both empirical CDFs are step functions that are constant between
+        consecutive observed values, so the integral is the sum of
+        |F_P - F_Q| on each interval times the interval's width.
         """
+        production = self._validate_production(production)
         ref_sorted = np.sort(self.reference)
         prod_sorted = np.sort(production)
 
@@ -184,10 +220,10 @@ class DriftMonitor:
         ref_cdf = np.searchsorted(ref_sorted, all_values, side="right") / len(ref_sorted)
         prod_cdf = np.searchsorted(prod_sorted, all_values, side="right") / len(prod_sorted)
 
-        # Trapezoidal integration of |CDF_ref - CDF_prod|
-        diffs = np.abs(ref_cdf - prod_cdf)
-        dx = np.diff(all_values, prepend=all_values[0])
-        distance = float(np.sum(diffs * dx))
+        # The CDF value at each point holds until the next point.
+        diffs = np.abs(ref_cdf - prod_cdf)[:-1]
+        widths = np.diff(all_values)
+        distance = float(np.sum(diffs * widths))
 
         return distance
 
@@ -201,7 +237,7 @@ class DriftMonitor:
         elif psi < self.psi_high:
             return "Moderate drift — monitor closely"
         else:
-            return "Significant drift — model review required"
+            return "Significant drift — investigate"
 
     # ------------------------------------------------------------------
     # Full evaluation
@@ -219,7 +255,7 @@ class DriftMonitor:
         -------
         DriftReport
         """
-        production = np.asarray(production, dtype=float)
+        production = self._validate_production(production)
 
         psi, bin_details = self.compute_psi(production)
         kl = self.compute_kl_divergence(production)
