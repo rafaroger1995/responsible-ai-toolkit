@@ -1,5 +1,6 @@
 """
-Model review demo on synthetic lending, insurance, and fraud-alert data.
+Model review demo on synthetic lending, insurance, and fraud-alert data,
+with month-by-month drift monitoring of the lending model.
 
 Runs the same toolkit components, unchanged, on three synthetic scenarios:
 consumer lending decisions, small-business property insurance quotes, and
@@ -12,6 +13,10 @@ transaction fraud alerts at a credit union. For each scenario it:
   4. Shows the reviewer-authorization and repeat-decision controls.
   5. Verifies the audit chain, then shows that an edited copy fails.
   6. Traces one decision through every audit entry that concerns it.
+
+A separate monitoring run compares the lending model's scores each month
+with its validation-period scores, applies a drift policy, and escalates a
+failed check to a model-risk reviewer, all recorded in an audit log.
 
 Only the scenario configuration differs between the runs: the data,
 the rule settings, the reviewer roles, and a stand-in for reviewer
@@ -42,7 +47,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
 
+import numpy as np
+
 from responsible_ai_toolkit.audit import AuditLogger
+from responsible_ai_toolkit.drift import DriftMonitor
 from responsible_ai_toolkit.hitl import HITLOrchestrator
 from responsible_ai_toolkit.hitl.orchestrator import ReviewDecision
 from responsible_ai_toolkit.policy.engine import Policy, PolicyEngine
@@ -439,6 +447,139 @@ def run_scenario(sc: Scenario) -> Dict[str, Any]:
     }
 
 
+# ----------------------------------------------------------------------
+# Ongoing monitoring: drift in the lending model's scores
+# ----------------------------------------------------------------------
+
+MONITORING_SEED = 20260925
+MONITORING_PERIODS = ["Month 1", "Month 2", "Month 3", "Month 4", "Month 5", "Month 6"]
+# Synthetic downward shift in score distribution, per month.
+MONITORING_SHIFTS = [0.0, 0.01, 0.02, 0.04, 0.06, 0.075]
+PSI_LOW, PSI_HIGH = 0.10, 0.25
+MONITORING_LABELS = {APPROVE: "continue automation", DECLINE: "pause automated approvals"}
+
+
+def run_monitoring() -> Dict[str, Any]:
+    rng = np.random.default_rng(MONITORING_SEED)
+    reference = rng.beta(5, 3, 4000)  # model scores from the validation period
+    monitor = DriftMonitor(reference=reference, psi_thresholds=(PSI_LOW, PSI_HIGH))
+
+    engine = PolicyEngine()
+    engine.add_policy(PolicyEngine.drift_threshold_policy("score-drift", psi_threshold=PSI_HIGH))
+
+    audit = AuditLogger(system_id="synthetic-lending-model-monitoring")
+    hitl = HITLOrchestrator()
+    for reviewer in ("model-risk-a", "model-risk-b"):
+        hitl.add_reviewer(reviewer, roles=["model-risk"])
+
+    periods = []
+    for period, shift in zip(MONITORING_PERIODS, MONITORING_SHIFTS):
+        scores = np.clip(rng.beta(5, 3, 1500) - shift, 0.0, 1.0)
+        report = monitor.evaluate(scores)
+        row = {
+            "period": period,
+            "scored": int(scores.size),
+            "psi": report.psi,
+            "kl": report.kl_divergence,
+            "wasserstein": report.wasserstein_distance,
+            "interpretation": report.psi_interpretation,
+            "policy": "passed",
+            "action": "Routine monitoring",
+            "reviewer": None,
+            "decision": None,
+        }
+
+        alert = None
+        if report.psi >= PSI_LOW:
+            alert = audit.log_drift_alert(
+                metric_name="psi",
+                value=round(report.psi, 4),
+                threshold=PSI_HIGH,
+                interpretation=report.psi_interpretation,
+                metadata={"period": period},
+            )
+            row["action"] = "Monitor closely"
+
+        evaluation = engine.evaluate({"psi": report.psi, "period": period})
+        for result in evaluation.results:
+            audit.log_policy_check(
+                policy_id=result.policy_id,
+                result="passed" if result.passed else "failed",
+                details={"period": period, "psi": round(report.psi, 4), "error": result.error},
+            )
+
+        if evaluation.violations:
+            row["policy"] = "failed"
+            case = hitl.submit_for_review(
+                case_id=f"DRIFT-{period.replace(' ', '-').upper()}",
+                category="model-risk",
+                ai_decision={"psi": round(report.psi, 4), "interpretation": report.psi_interpretation},
+                reason=f"Score PSI at or above {PSI_HIGH}",
+            )
+            audit.log_escalation(
+                reason=f"Score PSI {report.psi:.3f} at or above {PSI_HIGH}",
+                source_entry_id=alert.entry_id if alert else "",
+                escalated_to=case.assigned_to,
+                priority="high",
+                metadata={"period": period},
+            )
+            rationale = ("Route applications to manual review until the score "
+                         "shift is investigated.")
+            hitl.record_decision(case.internal_id, case.assigned_to, DECLINE, rationale)
+            audit.log_human_review(
+                reviewer_id=case.assigned_to,
+                decision=DECLINE,
+                reasoning=rationale,
+                original_prediction={"psi": round(report.psi, 4)},
+                override=False,
+                metadata={"period": period},
+            )
+            row.update(action="Escalated", reviewer=case.assigned_to, decision=DECLINE)
+        periods.append(row)
+
+    chain_ok = audit.verify_chain()
+    tampered = copy.deepcopy(audit)
+    tamper_index = next(i for i, e in enumerate(tampered._entries) if e.event_type == "drift_alert")
+    original = tampered._entries[tamper_index].payload["value"]
+    tamper_value = 0.05
+    tampered._entries[tamper_index].payload["value"] = tamper_value
+    tampered_ok = tampered.verify_chain()
+
+    escalated = [r for r in periods if r["action"] == "Escalated"]
+    trace_period = escalated[0]["period"] if escalated else periods[-1]["period"]
+    trace = []
+    for i, entry in enumerate(audit.entries):
+        meta = entry.payload.get("metadata", {}) or {}
+        details = entry.payload.get("details", {}) or {}
+        if trace_period in (meta.get("period"), details.get("period")):
+            trace.append((i, entry))
+
+    checks_ok = (
+        chain_ok
+        and not tampered_ok
+        and all(r["psi"] < PSI_LOW for r in periods[:3])
+        and periods[-1]["psi"] >= PSI_HIGH
+        and periods[-1]["action"] == "Escalated"
+        and all(r["action"] != "Escalated" for r in periods[:-1])
+    )
+    return {
+        "periods": periods,
+        "audit": audit,
+        "audit_entries": audit.size,
+        "event_types": [e.event_type for e in audit.entries],
+        "head_hash": audit.entries[-1].entry_hash,
+        "chain_verified": chain_ok,
+        "tampered_copy_verified": tampered_ok,
+        "tamper_index": tamper_index,
+        "tamper_from": original,
+        "tamper_value": tamper_value,
+        "trace_period": trace_period,
+        "trace": trace,
+        "evidence_package": audit.export_evidence_package(),
+        "all_checks_as_expected": checks_ok,
+    }
+
+
 def provenance() -> Dict[str, Any]:
     """Describe where this run came from, using GitHub Actions variables if present."""
     sha = os.environ.get("GITHUB_SHA")
@@ -465,6 +606,7 @@ REPORT_CSS = """
   --paper: #f3f6f5; --surface: #ffffff; --ink: #18212f; --muted: #566171;
   --rule: #d5dce2; --verified: #127a5b; --broken: #b42318; --unchecked: #b9c2cc;
   --prediction: #2f4b7c; --policy: #8a9ab0; --human: #a86a00;
+  --drift: #6d5bb3; --escalation: #c2410c;
   --serif: Charter, "Bitstream Charter", "Iowan Old Style", "Sitka Text", Cambria, Georgia, serif;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   color-scheme: light dark;
@@ -474,6 +616,7 @@ REPORT_CSS = """
     --paper: #0f141b; --surface: #161d27; --ink: #e5e9ef; --muted: #9ba6b5;
     --rule: #2a3442; --verified: #3cbf8e; --broken: #f07268; --unchecked: #3a4452;
     --prediction: #86a3dc; --policy: #5d6c81; --human: #e3a73e;
+    --drift: #a898e8; --escalation: #f08a4b;
   }
 }
 * { box-sizing: border-box; }
@@ -495,6 +638,15 @@ code { font-size: .92em; word-break: break-all; }
 .chain li.prediction { background: var(--prediction); }
 .chain li.policy_check { background: var(--policy); }
 .chain li.human_review { background: var(--human); }
+.chain li.drift_alert { background: var(--drift); }
+.chain li.escalation { background: var(--escalation); }
+.psi-chart { width: 100%; max-width: 44rem; height: auto; display: block; margin: 1rem 0 .25rem; }
+.psi-chart text { fill: var(--muted); font: 13px var(--sans); }
+.psi-chart .value { fill: var(--ink); font-weight: 600; }
+.psi-chart .limit { stroke: var(--muted); stroke-dasharray: 4 4; }
+.psi-chart .axis { stroke: var(--rule); }
+.monitor td:last-child { white-space: normal; min-width: 13rem; }
+.psi-chart + .legend { margin-bottom: 1.25rem; }
 .chain li.unchecked { background: repeating-linear-gradient(135deg, var(--unchecked) 0 3px, transparent 3px 6px); }
 .chain li.broken { background: var(--broken); outline: 2px solid var(--broken); outline-offset: 2px; }
 .chain-row { margin: 1.5rem 0; }
@@ -514,6 +666,7 @@ tr.reviewed td:first-child { box-shadow: inset 3px 0 0 var(--human); }
 .result-ok { color: var(--verified); font-weight: 600; }
 .result-no { color: var(--broken); font-weight: 600; }
 .controls td { white-space: normal; }
+.controls td code { word-break: normal; white-space: nowrap; }
 pre { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: .9rem 1rem; overflow-x: auto; font-size: .9rem; }
 ul.plain { padding-left: 1.2rem; max-width: 42rem; }
 footer { margin-top: 3rem; color: var(--muted); font-size: .9rem; }
@@ -743,6 +896,170 @@ def render_scenario_html(res: Dict[str, Any], prov: Dict[str, Any]) -> str:
     return page(f"Model review record: {sc.title} (synthetic)", body)
 
 
+def render_monitoring_html(mon: Dict[str, Any], prov: Dict[str, Any]) -> str:
+    """Render the month-by-month drift monitoring record."""
+    e = html.escape
+    periods = mon["periods"]
+    types = mon["event_types"]
+    k = mon["tamper_index"]
+
+    # PSI chart (inline SVG): one bar per period, dashed lines at both limits.
+    w, h, left, bottom, top = 640, 260, 48, 36, 16
+    plot_h = h - bottom - top
+    y_max = max(0.35, max(r["psi"] for r in periods) * 1.15)
+    band = lambda v: "var(--verified)" if v < PSI_LOW else ("var(--human)" if v < PSI_HIGH else "var(--broken)")
+    y = lambda v: top + plot_h * (1 - v / y_max)
+    step = (w - left - 8) / len(periods)
+    bars = []
+    for i, r in enumerate(periods):
+        x = left + i * step + step * 0.2
+        bw = step * 0.6
+        bars.append(
+            f'<rect x="{x:.1f}" y="{y(r["psi"]):.1f}" width="{bw:.1f}" '
+            f'height="{top + plot_h - y(r["psi"]):.1f}" rx="2" fill="{band(r["psi"])}"></rect>'
+            f'<text class="value" x="{x + bw / 2:.1f}" y="{y(r["psi"]) - 6:.1f}" text-anchor="middle">{r["psi"]:.3f}</text>'
+            f'<text x="{x + bw / 2:.1f}" y="{h - 12}" text-anchor="middle">{e(r["period"])}</text>'
+        )
+    limits = "".join(
+        f'<line class="limit" x1="{left}" x2="{w - 8}" y1="{y(v):.1f}" y2="{y(v):.1f}"></line>'
+        f'<text x="{left - 6}" y="{y(v) + 4:.1f}" text-anchor="end">{v:.2f}</text>'
+        for v in (PSI_LOW, PSI_HIGH)
+    )
+    chart = (
+        f'<svg class="psi-chart" viewBox="0 0 {w} {h}" role="img" '
+        f'aria-label="Population stability index by month">'
+        f'<line class="axis" x1="{left}" x2="{w - 8}" y1="{top + plot_h}" y2="{top + plot_h}"></line>'
+        f"{limits}{''.join(bars)}</svg>"
+    )
+
+    table_rows = []
+    for r in periods:
+        action = e(r["action"])
+        if r["decision"]:
+            action += f"<br>{e(r['reviewer'])}: {e(MONITORING_LABELS.get(r['decision'], r['decision']))}"
+        css = "result-no" if r["policy"] == "failed" else "result-ok"
+        table_rows.append(
+            f"<tr><td>{e(r['period'])}</td><td class=\"num\">{r['scored']:,}</td>"
+            f"<td class=\"num\">{r['psi']:.3f}</td><td class=\"num\">{r['kl']:.3f}</td>"
+            f"<td class=\"num\">{r['wasserstein']:.3f}</td><td>{e(r['interpretation'])}</td>"
+            f'<td><span class="{css}">{e(r["policy"])}</span></td><td>{action}</td></tr>'
+        )
+
+    type_names = {"policy_check": "Policy check", "drift_alert": "Drift alert",
+                  "escalation": "Escalation", "human_review": "Human review"}
+    trace_rows = []
+    for i, entry in mon["trace"]:
+        pl = entry.payload
+        if entry.event_type == "drift_alert":
+            what = f"PSI {pl['value']:.3f} against limit {pl['threshold']:.2f}: {pl['interpretation']}."
+        elif entry.event_type == "policy_check":
+            what = f"Rule {pl['policy_id']}: {pl['result']}."
+        elif entry.event_type == "escalation":
+            what = f"Escalated to {pl['escalated_to']} ({pl['priority']} priority). {pl['reason']}."
+        elif entry.event_type == "human_review":
+            what = (f"{pl['reviewer_id']} decided to "
+                    f"{MONITORING_LABELS.get(pl['decision'], pl['decision'])}. {pl['reasoning']}")
+        else:
+            what = entry.event_type
+        trace_rows.append(
+            f'<tr><td class="num">{i + 1}</td><td>{e(type_names.get(entry.event_type, entry.event_type))}</td>'
+            f'<td>{e(what)}</td><td><code>{e(entry.entry_hash[:12])}</code></td></tr>'
+        )
+
+    chain = "".join(f'<li class="{e(t)}" title="Entry {i + 1}: {e(t)}"></li>' for i, t in enumerate(types))
+    edited = "".join(
+        f'<li class="{e(t if i < k else ("broken" if i == k else "unchecked"))}" title="Entry {i + 1}"></li>'
+        for i, t in enumerate(types)
+    )
+    chain_status = (
+        f'<span class="status ok">All {len(types)} entries verified.</span>'
+        if mon["chain_verified"] else '<span class="status bad">Verification failed.</span>'
+    )
+    edited_status = (
+        f'<span class="status bad">Verification failed at entry {k + 1}.</span>'
+        if not mon["tampered_copy_verified"]
+        else '<span class="status bad">Edited copy was not detected.</span>'
+    )
+
+    quiet = sum(1 for r in periods if r["psi"] < PSI_LOW)
+    moderate = [r["period"] for r in periods if PSI_LOW <= r["psi"] < PSI_HIGH]
+    escalated = [r for r in periods if r["action"] == "Escalated"]
+    quiet_word = {1: "one month", 2: "two months", 3: "three months", 4: "four months"}.get(quiet, f"{quiet} months")
+    story = f"PSI stayed below {PSI_LOW:.2f} for {quiet_word}"
+    if moderate:
+        story += f", rose into the monitoring band in {' and '.join(moderate)}"
+    if escalated:
+        first = escalated[0]
+        story += (f", and reached {first['psi']:.3f} in {first['period']}. That month's drift "
+                  f"check failed, the case was escalated to {first['reviewer']}, who "
+                  f"decided to {MONITORING_LABELS[first['decision']]} pending investigation")
+    story += "."
+
+    body = f"""<nav><a href="index.html">All demo scenarios</a></nav>
+<h1>Model monitoring record</h1>
+<p class="provenance">Month-by-month drift monitoring of the synthetic lending model, a demo of the Responsible AI Toolkit. {provenance_line(prov)}</p>
+{SYNTHETIC_NOTICE}
+
+<p class="lede">Each month, the lending model's scores were compared with its scores from the validation period. {e(story)}</p>
+
+<h2>Score drift by month</h2>
+<p>Population stability index (PSI) of each month's scores against the validation-period scores. Dashed lines mark the monitoring band at {PSI_LOW:.2f} and the escalation limit at {PSI_HIGH:.2f}.</p>
+{chart}
+<ul class="legend">
+<li><span style="background:var(--verified)"></span>Below {PSI_LOW:.2f}</li>
+<li><span style="background:var(--human)"></span>{PSI_LOW:.2f} to {PSI_HIGH:.2f}: monitor closely</li>
+<li><span style="background:var(--broken)"></span>{PSI_HIGH:.2f} or above: escalate</li>
+</ul>
+
+<div class="table-wrap">
+<table class="monitor">
+<thead><tr><th>Period</th><th>Scores</th><th>PSI</th><th>KL divergence</th><th>Wasserstein</th><th>Interpretation</th><th>Drift policy</th><th>Action</th></tr></thead>
+<tbody>{"".join(table_rows)}</tbody>
+</table>
+</div>
+<p>The three measures come from the toolkit's drift monitor. The drift policy is the toolkit's built-in drift rule with a limit of {PSI_HIGH:.2f}. Both limits are common rules of thumb, not regulatory or supervisory standards.</p>
+
+<h2>Trace the escalation</h2>
+<p>Every audit entry for {e(mon["trace_period"])}, in the order it was written: the alert, the failed check, the escalation, and the reviewer's decision.</p>
+<div class="table-wrap">
+<table class="controls">
+<thead><tr><th>Entry</th><th>Type</th><th>What was recorded</th><th>Entry hash</th></tr></thead>
+<tbody>{"".join(trace_rows)}</tbody>
+</table>
+</div>
+
+<h2>Audit record</h2>
+<p>Each block is one log entry, in order. Months with no drift produce only a policy check; drift adds an alert, and a failed check adds an escalation and a review.</p>
+<div class="chain-row">
+<p>{chain_status}</p>
+<ul class="chain" aria-label="Audit log entries">{chain}</ul>
+<ul class="legend">
+<li><span style="background:var(--policy)"></span>Policy check</li>
+<li><span style="background:var(--drift)"></span>Drift alert</li>
+<li><span style="background:var(--escalation)"></span>Escalation</li>
+<li><span style="background:var(--human)"></span>Human review</li>
+</ul>
+</div>
+<div class="chain-row">
+<p>A copy of the same log with the first drift alert's PSI edited from {mon["tamper_from"]:.3f} to {mon["tamper_value"]:.3f}, as if to hide it. {edited_status} Entries after that point are not verified.</p>
+<ul class="chain" aria-label="Edited copy of the audit log">{edited}</ul>
+</div>
+<p>Chain head hash: <code>{e(mon["head_hash"])}</code>. Keeping this value somewhere separate from the log makes later removal of entries detectable.</p>
+
+<h2>Limits of this record</h2>
+<ul class="plain">
+<li>The score shift is synthetic and was built into the data. Real drift has causes that need investigation, such as changes in applicants, data pipelines, or economic conditions.</li>
+<li>PSI measures a change in the score distribution, not a change in accuracy. Checking accuracy requires outcomes, which arrive later.</li>
+<li>The reviewer decision comes from a fixed rule standing in for human judgment.</li>
+<li>Scores are generated with NumPy; exact figures can differ slightly across NumPy versions, while the monthly pattern and the escalation stay the same.</li>
+<li>Passing these checks does not establish compliance with any law, regulation, or guidance.</li>
+</ul>
+
+<p>Raw output: <a href="monitoring_audit_log.json">monitoring_audit_log.json</a> and <a href="monitoring_evidence_package.json">monitoring_evidence_package.json</a>.</p>
+"""
+    return page("Model monitoring record: synthetic lending model", body)
+
+
 def comparison_rows(results: List[Dict[str, Any]]) -> List[Tuple[str, List[str]]]:
     """Rows comparing the scenarios, built from each run's configuration and results."""
     def rules(res: Dict[str, Any]) -> str:
@@ -774,7 +1091,8 @@ def comparison_rows(results: List[Dict[str, Any]]) -> List[Tuple[str, List[str]]
     return rows
 
 
-def render_index_html(results: List[Dict[str, Any]], prov: Dict[str, Any]) -> str:
+def render_index_html(results: List[Dict[str, Any]], prov: Dict[str, Any],
+                      mon: Dict[str, Any]) -> str:
     e = html.escape
     cards = []
     for res in results:
@@ -804,6 +1122,13 @@ def render_index_html(results: List[Dict[str, Any]], prov: Dict[str, Any]) -> st
 
 <div class="scenarios">{"".join(cards)}</div>
 
+<h2>Ongoing model monitoring</h2>
+<div class="scenarios">
+<div class="scenario"><h3><a href="monitoring.html">Month-by-month drift monitoring</a></h3>
+<p>The lending model's scores over six months, compared with its validation period. {sum(1 for r in mon["periods"] if r["action"] == "Escalated")} month crossed the escalation limit and went to a model-risk reviewer.</p>
+<p><a href="monitoring.html">Open the monitoring record</a></p></div>
+</div>
+
 <h2>What stayed the same and what changed</h2>
 <p>Built from each run's configuration and results. All runs use the same toolkit code.</p>
 <div class="table-wrap">
@@ -823,7 +1148,8 @@ python examples/model_review_demo.py demo_output</pre>
     return page("Responsible AI Toolkit: synthetic review demos", body)
 
 
-def render_summary(results: List[Dict[str, Any]], prov: Dict[str, Any]) -> str:
+def render_summary(results: List[Dict[str, Any]], prov: Dict[str, Any],
+                   mon: Dict[str, Any]) -> str:
     lines = [
         "# Model review demo (synthetic data)",
         "",
@@ -877,7 +1203,28 @@ def render_summary(results: List[Dict[str, Any]], prov: Dict[str, Any]) -> str:
             f"{'passed (unexpected)' if res['tampered_copy_verified'] else 'failed, as expected'}.",
             "",
         ]
-    all_ok = all(r["all_checks_as_expected"] for r in results)
+    lines += [
+        "## Month-by-month drift monitoring (lending model)",
+        "",
+        "| Period | PSI | KL divergence | Wasserstein | Interpretation | Drift policy | Action |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for r in mon["periods"]:
+        action = r["action"] + (
+            f" ({r['reviewer']}: {MONITORING_LABELS[r['decision']]})" if r["decision"] else ""
+        )
+        lines.append(
+            f"| {r['period']} | {r['psi']:.3f} | {r['kl']:.3f} | {r['wasserstein']:.3f} | "
+            f"{r['interpretation']} | {r['policy']} | {action} |"
+        )
+    lines += [
+        "",
+        f"Audit entries: {mon['audit_entries']}. Chain verification: "
+        f"{'passed' if mon['chain_verified'] else 'FAILED'}. Edited copy: verification "
+        f"{'passed (unexpected)' if mon['tampered_copy_verified'] else 'failed, as expected'}.",
+        "",
+    ]
+    all_ok = all(r["all_checks_as_expected"] for r in results) and mon["all_checks_as_expected"]
     lines.append(f"All demo checks as expected: {'yes' if all_ok else 'NO'}.")
     lines.append("")
     return "\n".join(lines)
@@ -888,6 +1235,7 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     prov = provenance()
     results = [run_scenario(sc) for sc in SCENARIOS]
+    mon = run_monitoring()
 
     for res in results:
         key = res["scenario"].key
@@ -897,12 +1245,18 @@ def main() -> int:
         (output_dir / f"{key}_evidence_package.json").write_text(
             json.dumps(res["evidence_package"], indent=2, default=str)
         )
-    (output_dir / "index.html").write_text(render_index_html(results, prov), encoding="utf-8")
-    summary = render_summary(results, prov)
+    (output_dir / "monitoring.html").write_text(render_monitoring_html(mon, prov), encoding="utf-8")
+    (output_dir / "monitoring_audit_log.json").write_text(mon["audit"].export_json())
+    (output_dir / "monitoring_evidence_package.json").write_text(
+        json.dumps(mon["evidence_package"], indent=2, default=str)
+    )
+    (output_dir / "index.html").write_text(render_index_html(results, prov, mon), encoding="utf-8")
+    summary = render_summary(results, prov, mon)
     (output_dir / "summary.md").write_text(summary)
 
     print(summary)
-    return 0 if all(r["all_checks_as_expected"] for r in results) else 1
+    ok = all(r["all_checks_as_expected"] for r in results) and mon["all_checks_as_expected"]
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
