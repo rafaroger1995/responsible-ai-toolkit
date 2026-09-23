@@ -43,12 +43,14 @@ python -m pip install -e ".[dev]"
 
 ### Explore the examples
 
-* [Lending model evaluation](examples/lending_fairness.py): an illustrative lending workflow.
+* [Lending model review](examples/lending_model_review.py): drift monitoring, policy checks, human review, a governance summary, and an audit trail for a fictional lender.
 * [Insurance underwriting](examples/insurance_underwriting.py): an illustrative insurance workflow.
+* [Model review demo](examples/model_review_demo.py): the same audit, policy, and human-review components on synthetic lending and insurance data, plus month-by-month drift monitoring. [View the published review records](https://rafaroger1995.github.io/responsible-ai-toolkit/) or a [sample run](docs/sample-run.md).
 
 ```bash
-python examples/lending_fairness.py
+python examples/lending_model_review.py
 python examples/insurance_underwriting.py
+python examples/model_review_demo.py demo_output
 ```
 
 Review each script’s inputs, configuration, and assumptions before execution. Use synthetic or appropriately authorized data.
@@ -114,12 +116,16 @@ Operational use requires institution-specific validation, security and privacy c
 
 Evaluation should cover input validation, missing-data behavior, metric suitability, policy handling, review permissions, record integrity, persistence, and failure handling.
 
+Known limitations of the current code are listed in the [changelog](CHANGELOG.md#known-limitations).
+
 Reuse across institutions is an intended design objective. Demonstrating it requires documenting which components remain unchanged, which need configuration or code changes, and what manual work is required. The presence of multiple examples alone does not establish successful transfer or adoption.
 
 ## Project history
 
 * **Through April 15, 2026:** Initial components, examples, and CI workflow.
-* **September 22, 2026:** Corrections and regression tests for missing drift inputs, empty policy evaluations, policy evaluation statuses, export stability, reviewer authorization, repeat review decisions, and audit-chain integrity; removal of compliance and framework-alignment claims from code documentation.
+* **September 22, 2026:** Corrections and regression tests for missing drift inputs, empty policy evaluations, policy evaluation statuses, export stability, reviewer authorization, repeat review decisions, audit-chain integrity, drift-measure calculations, and governance summary counts; removal of compliance and framework-alignment claims from code documentation; replacement of the lending example with a lending model review example; a model review demo that runs lending and insurance configurations and drift monitoring on the same components and publishes the results as review records on each commit.
+
+Details, including a register of known limitations, are in the [changelog](CHANGELOG.md).
 
 Dates reflect the repository's commit history.
 
@@ -128,7 +134,7 @@ Dates reflect the repository's commit history.
 The following are development priorities, not completed capabilities:
 
 * A versioned, project-defined assurance-record schema linking model identity, evaluation inputs, policy versions, findings, review decisions, exceptions, and remediation.
-* Reproducible synthetic profiles for evaluating shared components across lending and insurance workflows.
+* Broader reproducible synthetic profiles for evaluating shared components across lending and insurance workflows, extending the initial comparison in the model review demo.
 * An adaptation report documenting shared code, configuration changes, implementation effort, and limitations.
 * A practitioner review guide with version-specific reproduction instructions.
 * Versioned releases documenting tested behavior and known limitations.
