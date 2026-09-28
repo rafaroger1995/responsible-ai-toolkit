@@ -39,6 +39,7 @@ Usage:
 from __future__ import annotations
 
 import time
+import copy
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -82,6 +83,8 @@ class Policy:
     category: str = "general"
     version: str = "1.0"
     enabled: bool = True
+    parameters: Dict[str, Any] = field(default_factory=dict)
+    scope: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -97,9 +100,12 @@ class PolicyResult:
     description: str
     timestamp: float = field(default_factory=time.time)
     error: Optional[str] = None
+    policy_version: str = "unspecified"
+    parameters: Dict[str, Any] = field(default_factory=dict)
+    scope: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        return copy.deepcopy({
             "policy_id": self.policy_id,
             "policy_name": self.policy_name,
             "passed": self.passed,
@@ -109,7 +115,10 @@ class PolicyResult:
             "description": self.description,
             "timestamp": self.timestamp,
             "error": self.error,
-        }
+            "policy_version": self.policy_version,
+            "parameters": self.parameters,
+            "scope": self.scope,
+        })
 
 
 @dataclass
@@ -239,6 +248,8 @@ class PolicyEngine:
             severity="critical",
             frameworks=list(frameworks) if frameworks else [],
             category="fairness",
+            parameters={"metric_key": metric_key, "operator": ">=", "threshold": threshold},
+            scope={"purpose": "configured fairness metric check"},
         )
 
     @staticmethod
@@ -260,6 +271,8 @@ class PolicyEngine:
             severity="critical",
             frameworks=list(frameworks) if frameworks else [],
             category="transparency",
+            parameters={"field": "confidence", "operator": ">=", "threshold": threshold},
+            scope={"purpose": "review routing; not substantive eligibility"},
         )
 
     @staticmethod
@@ -282,6 +295,8 @@ class PolicyEngine:
             severity="critical",
             frameworks=list(frameworks) if frameworks else [],
             category="stability",
+            parameters={"field": "psi", "operator": "<", "threshold": psi_threshold},
+            scope={"purpose": "distribution drift signal; not accuracy"},
         )
 
     @staticmethod
@@ -298,12 +313,14 @@ class PolicyEngine:
                 f"All required fields must be present: {', '.join(required_fields)}. "
                 f"Missing data may compromise model reliability."
             ),
-            rule=lambda ctx, fields=required_fields: all(
+            rule=lambda ctx, fields=tuple(required_fields): all(
                 ctx.get(f) is not None for f in fields
             ),
             severity="warning",
             frameworks=list(frameworks) if frameworks else [],
             category="data_quality",
+            parameters={"required_fields": list(required_fields), "operator": "not_null"},
+            scope={"purpose": "configured data completeness"},
         )
 
     # ------------------------------------------------------------------
@@ -342,18 +359,24 @@ class PolicyEngine:
                 if any(f in p.frameworks for f in frameworks)
             ]
 
+        # Each callable sees the same input snapshot. A mutating custom rule must
+        # not alter the caller's values, another rule's evidence or the export.
+        context_snapshot = copy.deepcopy(context)
         results: List[PolicyResult] = []
         for policy in policies:
             try:
-                passed = bool(policy.rule(context))
+                passed = bool(policy.rule(copy.deepcopy(context_snapshot)))
                 results.append(PolicyResult(
                     policy_id=policy.policy_id,
                     policy_name=policy.name,
                     passed=passed,
                     severity=policy.severity,
                     category=policy.category,
-                    frameworks=policy.frameworks,
+                    frameworks=copy.deepcopy(policy.frameworks),
                     description=policy.description,
+                    policy_version=policy.version,
+                    parameters=copy.deepcopy(policy.parameters),
+                    scope=copy.deepcopy(policy.scope),
                 ))
             except Exception as e:
                 results.append(PolicyResult(
@@ -362,18 +385,21 @@ class PolicyEngine:
                     passed=False,
                     severity=policy.severity,
                     category=policy.category,
-                    frameworks=policy.frameworks,
+                    frameworks=copy.deepcopy(policy.frameworks),
                     description=policy.description,
+                    policy_version=policy.version,
+                    parameters=copy.deepcopy(policy.parameters),
+                    scope=copy.deepcopy(policy.scope),
                     error=str(e),
                 ))
 
         report = EvaluationReport(
             results=results,
-            context_snapshot={k: str(v) for k, v in context.items()},
+            context_snapshot=context_snapshot,
         )
-        self._evaluation_history.append(report)
+        self._evaluation_history.append(copy.deepcopy(report))
         return report
 
     @property
     def evaluation_history(self) -> List[EvaluationReport]:
-        return list(self._evaluation_history)
+        return copy.deepcopy(self._evaluation_history)
