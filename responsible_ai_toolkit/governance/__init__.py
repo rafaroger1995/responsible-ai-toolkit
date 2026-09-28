@@ -1,4 +1,4 @@
-"""Governance reporting and compliance evidence generation."""
+"""Experimental governance summaries; no regulatory compliance determination."""
 
 from responsible_ai_toolkit.governance.report import GovernanceReporter
 
