@@ -6,14 +6,13 @@ including role-based reviewer queues, configurable escalation policies,
 SLA enforcement, disposition logging, and active-learning sampling
 for edge cases.
 
-Designed to meet the human oversight requirements emphasized by the
-NIST AI Risk Management Framework, FDIC model risk guidance, and
-Treasury AI recommendations for financial institutions.
+An experimental in-memory workflow. It does not establish regulatory
+compliance, authenticate real users, or provide durable approval records.
 
 Key capabilities:
   - Route flagged AI decisions to appropriate reviewer queues
   - Enforce escalation policies based on confidence, risk, or bias alerts
-  - Track review SLAs and generate compliance evidence
+  - Track configured review deadlines and record workflow events
   - Support active-learning sampling to surface edge cases
   - Log all review decisions in the audit trail
 
@@ -51,6 +50,7 @@ class CaseStatus(str, Enum):
     PENDING = "pending"
     ASSIGNED = "assigned"
     IN_REVIEW = "in_review"
+    WAITING_INFO = "waiting_info"
     COMPLETED = "completed"
     ESCALATED = "escalated"
     EXPIRED = "expired"
@@ -95,10 +95,11 @@ class ReviewCase:
     decision: Optional[ReviewDecision] = None
     reviewer_reasoning: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    required_reviewer_role: Optional[str] = None
 
     @property
     def is_overdue(self) -> bool:
-        if self.status in (CaseStatus.COMPLETED, CaseStatus.ESCALATED):
+        if self.status == CaseStatus.COMPLETED:
             return False
         return time.time() > self.sla_deadline
 
@@ -166,7 +167,9 @@ class HITLOrchestrator:
         roles: Optional[List[str]] = None,
         max_load: int = 50,
     ) -> Reviewer:
-        """Register a human reviewer with their roles and capacity."""
+        """Register a reviewer. Empty roles confer no review authority."""
+        if reviewer_id in self._reviewers:
+            raise ValueError("Reviewer is already registered; registration cannot replace authority or workload.")
         reviewer = Reviewer(
             reviewer_id=reviewer_id,
             roles=roles or [],
@@ -247,7 +250,7 @@ class HITLOrchestrator:
             r for r in self._reviewers.values()
             if r.active
             and r.current_load < r.max_load
-            and (not r.roles or case.category in r.roles)
+            and (case.required_reviewer_role or case.category) in r.roles
         ]
 
         if not candidates:
@@ -292,20 +295,24 @@ class HITLOrchestrator:
         if case.assigned_to != reviewer_id:
             raise ValueError("Only the assigned reviewer may record a decision.")
 
-        if reviewer.roles and case.category not in reviewer.roles:
+        if (case.required_reviewer_role or case.category) not in reviewer.roles:
             raise ValueError("Reviewer is not authorized for this case category.")
 
         dec = ReviewDecision(decision)
 
         case.decision = dec
         case.reviewer_reasoning = reasoning
-        case.completed_at = time.time()
-        case.status = CaseStatus.COMPLETED
+        action_at = time.time()
+        terminal = dec in (ReviewDecision.APPROVE, ReviewDecision.REJECT, ReviewDecision.OVERRIDE)
+        case.completed_at = action_at if terminal else None
+        case.status = (CaseStatus.COMPLETED if terminal else
+                       CaseStatus.WAITING_INFO if dec == ReviewDecision.REQUEST_INFO else
+                       CaseStatus.ESCALATED)
 
         # Update reviewer stats
-        if case.assigned_to and case.assigned_to in self._reviewers:
-            reviewer = self._reviewers[case.assigned_to]
+        if terminal or dec == ReviewDecision.ESCALATE:
             reviewer.current_load = max(0, reviewer.current_load - 1)
+        if terminal:
             reviewer.total_reviews += 1
 
         # Log the decision
@@ -317,17 +324,19 @@ class HITLOrchestrator:
             "reasoning": reasoning,
             "ai_decision": case.ai_decision,
             "is_override": dec == ReviewDecision.OVERRIDE,
+            "is_terminal": terminal,
             "review_time_seconds": (
-                (case.completed_at - case.assigned_at)
+                (action_at - case.assigned_at)
                 if case.assigned_at else None
             ),
-            "within_sla": case.completed_at <= case.sla_deadline,
-            "timestamp": case.completed_at,
+            "within_sla": (action_at <= case.sla_deadline) if terminal else None,
+            "timestamp": action_at,
         })
 
         # Handle escalation decision
         if dec == ReviewDecision.ESCALATE:
-            case.status = CaseStatus.ESCALATED
+            case.assigned_to = None
+            case.assigned_at = None
             self._apply_escalation_policies(case)
 
         return case
@@ -338,7 +347,7 @@ class HITLOrchestrator:
             if policy.condition(case):
                 case.priority = policy.new_priority
                 case.status = CaseStatus.PENDING
-                case.assigned_to = None
+                case.required_reviewer_role = policy.escalate_to_role
                 self._try_assign(case)
                 break
 
@@ -369,18 +378,19 @@ class HITLOrchestrator:
     def decision_log(self) -> List[Dict[str, Any]]:
         return list(self._decision_log)
 
-    def sla_compliance_rate(self) -> float:
-        """Compute the fraction of completed reviews within SLA."""
+    def sla_compliance_rate(self) -> Optional[float]:
+        """Fraction of terminal reviews within the original deadline; None if none."""
         completed = [d for d in self._decision_log if d.get("within_sla") is not None]
         if not completed:
-            return 1.0
+            return None
         return sum(1 for d in completed if d["within_sla"]) / len(completed)
 
     def override_rate(self) -> float:
         """Compute the fraction of reviews that overrode the AI decision."""
-        if not self._decision_log:
+        completed = [d for d in self._decision_log if d.get("is_terminal")]
+        if not completed:
             return 0.0
-        return sum(1 for d in self._decision_log if d["is_override"]) / len(self._decision_log)
+        return sum(1 for d in completed if d["is_override"]) / len(completed)
 
     def get_stats(self) -> Dict[str, Any]:
         """Return summary statistics for the HITL system."""
@@ -388,6 +398,7 @@ class HITLOrchestrator:
             "total_cases": len(self._cases),
             "pending": len(self.get_queue(status="pending")),
             "assigned": len(self.get_queue(status="assigned")),
+            "waiting_info": len(self.get_queue(status="waiting_info")),
             "completed": len(self.get_queue(status="completed")),
             "escalated": len(self.get_queue(status="escalated")),
             "overdue": len(self.get_overdue_cases()),
