@@ -1,65 +1,60 @@
-# Getting Started
+# Getting started
 
-## Installation
+This is an experimental Python toolkit and synthetic demonstration. It has no
+production authentication, persistent review store or independent validation.
 
-```bash
-pip install responsible-ai-toolkit
-```
-
-Or from source:
+## Install the inspected source
 
 ```bash
 git clone https://github.com/rafaroger1995/responsible-ai-toolkit.git
 cd responsible-ai-toolkit
-pip install -e ".[dev]"
+python -m pip install -e ".[dev]"
 ```
 
-## Core Concepts
+Record `git rev-parse HEAD` and your Python/dependency versions with any results.
+An installation from a package index has not been verified for this guide.
 
-### Fairness Metrics
+## Interpret the components
 
-The toolkit evaluates AI systems against four fairness criteria commonly referenced by financial regulators:
+- Fairness metrics are descriptive diagnostics. A default ratio or threshold is
+  not a fair-lending standard or a determination of unlawful discrimination.
+- Drift measures compare supplied populations. Configured thresholds are
+  illustrative, and a signal does not establish a cause or the correct remedy.
+- Policy checks execute configured rules. Passing them does not establish
+  compliance with a statute, regulation, supervisory guidance or audit standard.
+- The in-memory audit hash chain can expose some changes when checked against
+  trusted prior records. A writer can recompute the chain; independent anchors,
+  access controls, persistence and retention are not provided by this module.
 
-- **Demographic Parity**: Are positive outcomes distributed proportionally across groups?
-- **Equal Opportunity**: Among truly qualified applicants, are approval rates equal across groups?
-- **Equalized Odds**: Are both true-positive and false-positive rates equal across groups?
-- **Calibration**: When the model says "80% likely," does each group actually see 80% positive outcomes?
+## Human review
 
-The default threshold is 0.80 (the "four-fifths rule"), consistent with EEOC adverse-impact guidance and commonly applied in fair lending examinations.
+Register explicit roles matching a case category; an empty role list confers no
+authority. Duplicate reviewer IDs are rejected so registration cannot silently
+replace authority or reset workload. These are application checks, not verified
+identities or a secure authorization service.
 
-### Drift Monitoring
+`request_info` keeps the case open in `waiting_info`, retaining its reviewer and
+workload. An assigned authorized reviewer can later record a final disposition.
+`escalate` releases the original assignment and routes to the matching policy's
+`escalate_to_role`. If no qualified reviewer is available it remains pending; if
+no policy matches it remains escalated and unassigned. Such cases stay eligible
+for overdue reporting. There is currently no public reassignment/resumption API
+for these unassigned cases; that remains a development limitation.
 
-Models degrade over time as economic conditions, customer behavior, and data distributions shift. The toolkit monitors for drift using:
+Only approve, reject and override complete a case. Requests and escalations are
+events, not completed reviews. The original SLA deadline is retained. The SLA
+rate is `None` when there are no completed reviews; callers must handle missing
+data. The override rate uses completed reviews as its denominator.
 
-- **PSI (Population Stability Index)**: Industry standard in credit risk (PSI < 0.10 = stable, 0.10-0.25 = monitor, > 0.25 = review required)
-- **KL Divergence**: Sensitive to tail behavior
-- **Wasserstein Distance**: Robust to non-overlapping distributions
-
-### Audit Logging
-
-Every AI decision is recorded in a tamper-evident log using SHA-256 hash chaining. Each entry links to the previous entry's hash, making it computationally infeasible to alter historical records without detection. This satisfies audit trail requirements for SOC 2, FDIC examination, and model risk management.
-
-### HITL Orchestration
-
-The human-in-the-loop module routes flagged AI decisions to qualified reviewers based on configurable rules: confidence thresholds, risk scores, bias alerts, or random active-learning sampling. It tracks review SLAs, logs all decisions, and computes compliance statistics.
-
-### Policy-as-Code
-
-Regulatory requirements are encoded as executable rules that run against AI system outputs at runtime. Pre-built policy factories cover common requirements (fairness thresholds, drift limits, data completeness), and custom policies can be defined for institution-specific rules.
-
-## Running the Examples
+## Examples and checks
 
 ```bash
-# Fair lending compliance for a community bank
-python examples/lending_fairness.py
-
-# Insurance underwriting governance
+python examples/lending_model_review.py
 python examples/insurance_underwriting.py
+python examples/model_review_demo.py demo_output
+python -m pytest tests/ -q
 ```
 
-## Running Tests
-
-```bash
-pytest tests/ -v
-pytest tests/ -v --cov=responsible_ai_toolkit  # With coverage
-```
+The insurance example contains legacy diagnostic assumptions that have not
+received a domain review. Running without errors is not content validation.
+See `CHANGELOG.md` for dated changes and remaining limitations.
