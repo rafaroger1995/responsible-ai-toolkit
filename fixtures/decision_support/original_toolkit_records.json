@@ -1,0 +1,215 @@
+{
+  "source_commit": "86c7aef9af63f2dba4536056ae559b9a3282cff5",
+  "captured_at_utc": "2026-09-26T23:03:05.559485+00:00",
+  "synthetic": true,
+  "records": {
+    "lending": [
+      {
+        "ref": "SYN-001",
+        "requested_amount": 15000,
+        "debt_to_income": 0.15,
+        "credit_history_months": 135,
+        "model_recommendation": "approve",
+        "confidence": 0.44
+      },
+      {
+        "ref": "SYN-002",
+        "requested_amount": 40000,
+        "debt_to_income": 0.12,
+        "credit_history_months": 193,
+        "model_recommendation": "approve",
+        "confidence": 0.67
+      },
+      {
+        "ref": "SYN-003",
+        "requested_amount": 25000,
+        "debt_to_income": 0.48,
+        "credit_history_months": 182,
+        "model_recommendation": "approve",
+        "confidence": 0.75
+      },
+      {
+        "ref": "SYN-004",
+        "requested_amount": 10000,
+        "debt_to_income": 0.49,
+        "credit_history_months": 139,
+        "model_recommendation": "decline",
+        "confidence": 0.71
+      },
+      {
+        "ref": "SYN-005",
+        "requested_amount": 10000,
+        "debt_to_income": 0.27,
+        "credit_history_months": null,
+        "model_recommendation": "decline",
+        "confidence": 0.95
+      },
+      {
+        "ref": "SYN-006",
+        "requested_amount": 5000,
+        "debt_to_income": 0.28,
+        "credit_history_months": 100,
+        "model_recommendation": "decline",
+        "confidence": 0.44
+      },
+      {
+        "ref": "SYN-007",
+        "requested_amount": 5000,
+        "debt_to_income": 0.29,
+        "credit_history_months": 133,
+        "model_recommendation": "approve",
+        "confidence": 0.44
+      },
+      {
+        "ref": "SYN-008",
+        "requested_amount": 15000,
+        "debt_to_income": 0.23,
+        "credit_history_months": 202,
+        "model_recommendation": "approve",
+        "confidence": 0.49
+      },
+      {
+        "ref": "SYN-009",
+        "requested_amount": 40000,
+        "debt_to_income": 0.45,
+        "credit_history_months": 223,
+        "model_recommendation": "decline",
+        "confidence": 0.5
+      },
+      {
+        "ref": "SYN-010",
+        "requested_amount": 10000,
+        "debt_to_income": 0.13,
+        "credit_history_months": 212,
+        "model_recommendation": "approve",
+        "confidence": 0.94
+      },
+      {
+        "ref": "SYN-011",
+        "requested_amount": 40000,
+        "debt_to_income": 0.43,
+        "credit_history_months": 58,
+        "model_recommendation": "decline",
+        "confidence": 0.82
+      },
+      {
+        "ref": "SYN-012",
+        "requested_amount": 15000,
+        "debt_to_income": 0.14,
+        "credit_history_months": 146,
+        "model_recommendation": "approve",
+        "confidence": 0.6
+      }
+    ],
+    "insurance": [
+      {
+        "ref": "INS-001",
+        "coverage_amount": 750000,
+        "prior_claims": 1,
+        "building_age_years": 38,
+        "last_inspection_year": 2021,
+        "model_recommendation": "decline",
+        "confidence": 0.58
+      },
+      {
+        "ref": "INS-002",
+        "coverage_amount": 1200000,
+        "prior_claims": 1,
+        "building_age_years": 4,
+        "last_inspection_year": 2026,
+        "model_recommendation": "offer",
+        "confidence": 0.91
+      },
+      {
+        "ref": "INS-003",
+        "coverage_amount": 500000,
+        "prior_claims": 4,
+        "building_age_years": 75,
+        "last_inspection_year": null,
+        "model_recommendation": "offer",
+        "confidence": 0.96
+      },
+      {
+        "ref": "INS-004",
+        "coverage_amount": 250000,
+        "prior_claims": 0,
+        "building_age_years": 43,
+        "last_inspection_year": 2019,
+        "model_recommendation": "offer",
+        "confidence": 0.75
+      },
+      {
+        "ref": "INS-005",
+        "coverage_amount": 750000,
+        "prior_claims": 2,
+        "building_age_years": 1,
+        "last_inspection_year": 2019,
+        "model_recommendation": "offer",
+        "confidence": 0.79
+      },
+      {
+        "ref": "INS-006",
+        "coverage_amount": 1200000,
+        "prior_claims": 4,
+        "building_age_years": 43,
+        "last_inspection_year": 2025,
+        "model_recommendation": "decline",
+        "confidence": 0.77
+      },
+      {
+        "ref": "INS-007",
+        "coverage_amount": 750000,
+        "prior_claims": 0,
+        "building_age_years": 39,
+        "last_inspection_year": 2024,
+        "model_recommendation": "offer",
+        "confidence": 0.87
+      },
+      {
+        "ref": "INS-008",
+        "coverage_amount": 250000,
+        "prior_claims": 2,
+        "building_age_years": 19,
+        "last_inspection_year": 2026,
+        "model_recommendation": "offer",
+        "confidence": 0.69
+      },
+      {
+        "ref": "INS-009",
+        "coverage_amount": 2000000,
+        "prior_claims": 3,
+        "building_age_years": 72,
+        "last_inspection_year": 2017,
+        "model_recommendation": "offer",
+        "confidence": 0.58
+      },
+      {
+        "ref": "INS-010",
+        "coverage_amount": 2000000,
+        "prior_claims": 2,
+        "building_age_years": 31,
+        "last_inspection_year": 2025,
+        "model_recommendation": "offer",
+        "confidence": 0.54
+      },
+      {
+        "ref": "INS-011",
+        "coverage_amount": 500000,
+        "prior_claims": 0,
+        "building_age_years": 70,
+        "last_inspection_year": 2024,
+        "model_recommendation": "offer",
+        "confidence": 0.62
+      },
+      {
+        "ref": "INS-012",
+        "coverage_amount": 250000,
+        "prior_claims": 4,
+        "building_age_years": 38,
+        "last_inspection_year": 2024,
+        "model_recommendation": "offer",
+        "confidence": 0.84
+      }
+    ]
+  }
+}
