@@ -831,10 +831,10 @@ def render_scenario_html(res: Dict[str, Any], prov: Dict[str, Any]) -> str:
 </div>
 
 <h2>Reviewer workload</h2>
-<p>{review_rate:.0%} of decisions went to a reviewer. Reviewers overrode the model in {override_rate:.0%} of the cases they decided.</p>
+<p>{review_rate:.0%} of recommendations were routed to a reviewer. Overrides account for {override_rate:.0%} of routed cases. Assigned cases include unresolved reviews; assignment does not mean a completed decision.</p>
 <div class="table-wrap narrow">
 <table>
-<thead><tr><th>Reviewer</th><th>Cases decided</th><th>Overrides</th></tr></thead>
+<thead><tr><th>Reviewer</th><th>Cases assigned</th><th>Overrides</th></tr></thead>
 <tbody>{"".join(workload_rows)}</tbody>
 </table>
 </div>
