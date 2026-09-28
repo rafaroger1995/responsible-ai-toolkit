@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "responsible-ai-toolkit"
 version = "0.1.0"
-description = "An open-source governance framework for deploying AI responsibly in regulated industries."
+description = "Experimental reusable components for AI assessment and accountable review in banking and insurance."
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.9"
 authors = [
-    {name = "Yash Lundia", email = "yash.lundia@example.com"},
+    {name = "Yash Lundia"},
 ]
 keywords = [
     "ai-governance",
@@ -54,6 +54,9 @@ Issues = "https://github.com/rafaroger1995/responsible-ai-toolkit/issues"
 
 [tool.setuptools.packages.find]
 include = ["responsible_ai_toolkit*"]
+
+[tool.setuptools.package-data]
+"responsible_ai_toolkit.decision_support" = ["profiles.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

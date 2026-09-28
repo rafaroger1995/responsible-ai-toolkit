@@ -14,6 +14,8 @@ htmlcov/
 .venv/
 env/
 venv/
+demo_output/
+decision_support_output/
 *.log
 .DS_Store
 .idea/
