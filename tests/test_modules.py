@@ -236,7 +236,7 @@ class TestHITLOrchestrator:
 
     def test_sla_compliance_rate(self):
         hitl = HITLOrchestrator()
-        hitl.add_reviewer("analyst_1")
+        hitl.add_reviewer("analyst_1", roles=["general"])
         case = hitl.submit_for_review(
             case_id="C-001", category="general",
             ai_decision={}, reason="test",
