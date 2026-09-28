@@ -42,6 +42,7 @@ import json
 import os
 import random
 import sys
+import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -54,6 +55,8 @@ from responsible_ai_toolkit.drift import DriftMonitor
 from responsible_ai_toolkit.hitl import HITLOrchestrator
 from responsible_ai_toolkit.hitl.orchestrator import ReviewDecision
 from responsible_ai_toolkit.policy.engine import Policy, PolicyEngine
+from responsible_ai_toolkit.decision_support import assess
+from responsible_ai_toolkit.decision_support.fixtures import adapt_original, profiles
 
 AVAILABLE_DECISIONS = {d.value for d in ReviewDecision}
 APPROVE = "approve"
@@ -211,6 +214,8 @@ SCENARIOS = [
                 rule=lambda ctx: ctx.get("coverage_amount", 0) <= 1_000_000,
                 severity="warning",
                 category="underwriting",
+                parameters={"field": "coverage_amount", "operator": "<=", "threshold": 1_000_000, "unit": "USD"},
+                scope={"purpose": "referral only; not eligibility"},
             )
         ],
         decision_labels={APPROVE: "offer", DECLINE: "decline"},
@@ -273,6 +278,11 @@ def run_scenario(sc: Scenario) -> Dict[str, Any]:
                 details={"record_ref": ref, "error": result.error},
             )
         findings = [r.policy_id for r in report.violations]
+        support = assess(adapt_original(record, sc.key), profiles(), run_id="model-review/" + sc.key).to_dict()
+        substantive_concern = support["review_action"] == "review_required"
+        audit.log_policy_check(policy_id="decision-support/" + support["assessment_id"],
+            result=support["decision_support"], details={"record_ref": ref, "evidence_sha256": support["evidence_sha256"],
+            "policy": support["policy_snapshot"], "findings": support["rule_findings"]})
 
         row = {
             "record_ref": ref,
@@ -283,15 +293,21 @@ def run_scenario(sc: Scenario) -> Dict[str, Any]:
             "reviewer": None,
             "review_decision": None,
             "override": False,
+            "decision_support_assessment": support,
+            "review_status": "not_required",
+            "customer_outcome_changed": False,
         }
-        if findings:
+        if findings or substantive_concern:
             case = hitl.submit_for_review(
                 case_id=ref,
                 category=sc.category,
                 ai_decision=ai_decision,
-                reason="Failed policy checks: " + ", ".join(findings),
+                reason="Checks requiring review: " + ", ".join(findings + ([support["decision_support"]] if substantive_concern else [])),
             )
-            queue.append((record, ai_decision, case, row))
+            if substantive_concern:
+                row.update(route="review required", reviewer=case.assigned_to, review_status="open")
+            else:
+                queue.append((record, ai_decision, case, row))
         rows.append(row)
 
     # Reviewers work through the queue after all cases are submitted.
@@ -310,6 +326,7 @@ def run_scenario(sc: Scenario) -> Dict[str, Any]:
         )
         row.update(
             route="human review",
+            review_status="synthetic_stand_in_completed",
             reviewer=case.assigned_to,
             review_decision=decision,
             override=override,
@@ -520,13 +537,16 @@ def run_monitoring() -> Dict[str, Any]:
 
 def provenance() -> Dict[str, Any]:
     """Describe where this run came from, using GitHub Actions variables if present."""
-    sha = os.environ.get("GITHUB_SHA")
+    try:
+        sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[1], text=True).strip()
+    except (OSError, subprocess.CalledProcessError):
+        sha = os.environ.get("GITHUB_SHA")
     server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
     repo = os.environ.get("GITHUB_REPOSITORY")
     run_id = os.environ.get("GITHUB_RUN_ID")
     run_number = os.environ.get("GITHUB_RUN_NUMBER")
     return {
-        "commit": sha[:7] if sha else "local run",
+        "commit": sha if sha else "source identity unavailable",
         "commit_url": f"{server}/{repo}/commit/{sha}" if sha and repo else None,
         "run_label": f"GitHub Actions run #{run_number}" if run_number else None,
         "run_url": f"{server}/{repo}/actions/runs/{run_id}" if run_id and repo else None,
@@ -627,12 +647,13 @@ def overrides_phrase(n: int) -> str:
 
 def counts(res: Dict[str, Any]) -> Dict[str, int]:
     rows = res["rows"]
-    reviewed = [r for r in rows if r["route"] == "human review"]
+    reviewed = [r for r in rows if r["route"] != "automated"]
     return {
         "total": len(rows),
         "automated": len(rows) - len(reviewed),
         "reviewed": len(reviewed),
         "overrides": sum(r["override"] for r in reviewed),
+        "open": sum(r.get("review_status") == "open" for r in rows),
     }
 
 
@@ -701,6 +722,7 @@ def render_scenario_html(res: Dict[str, Any], prov: Dict[str, Any]) -> str:
             f"<td>{e(r['model_recommendation'])}</td>"
             f'<td class="num">{r["confidence"]:.2f}</td>'
             f"<td>{e(', '.join(r['policy_findings']) or 'none')}</td>"
+            f"<td>{e(r['decision_support_assessment']['decision_support'].replace('_', ' '))}</td>"
             f"<td>{e(r['route'])}</td>"
             f"<td>{e(r['reviewer'] or '-')}</td>"
             f"<td>{decision}</td></tr>"
@@ -762,7 +784,8 @@ def render_scenario_html(res: Dict[str, Any], prov: Dict[str, Any]) -> str:
 <p class="provenance">{e(sc.title)}, a synthetic demo of the Responsible AI Toolkit. {provenance_line(prov)}</p>
 {SYNTHETIC_NOTICE}
 
-<p class="lede">{c['total']} model decisions were checked against {rules_word} rules. {c['automated']} passed and were automated. {c['reviewed']} failed a rule and went to a human reviewer, who overrode the model {overrides_phrase(c['overrides'])}. Every step was written to a hash-chained audit log.</p>
+<p class="lede">All {c['total']} original model recommendations received a separate decision-support assessment, regardless of confidence. {c['reviewed']} need review and {c['open']} remain open. The other {c['automated']} have no concern in the evaluated scope. No customer decision was executed.</p>
+<p>New demo specification: the versioned favorable-recommendation restrictions apply to both automated and manual paths. Passing them is necessary, not sufficient for eligibility. Original inputs and model predictions are unchanged. Legacy confidence, completeness and referral checks remain separate.</p>
 
 <h2>Audit record</h2>
 <p>Each block is one log entry, in order. Each entry's hash covers its contents and the entry before it, so an edit anywhere breaks verification from that point.</p>
@@ -789,10 +812,14 @@ def render_scenario_html(res: Dict[str, Any], prov: Dict[str, Any]) -> str:
 <p>Rules: {e(sc.rules_text)}. Thresholds are illustrative configuration values, not legal or supervisory standards.</p>
 <div class="table-wrap">
 <table>
-<thead><tr><th>{e(sc.record_label)}</th><th>Model</th><th>Confidence</th><th>Policy findings</th><th>Route</th><th>Reviewer</th><th>Reviewer decision</th></tr></thead>
+<thead><tr><th>{e(sc.record_label)}</th><th>Model</th><th>Confidence</th><th>Routing findings</th><th>Decision support</th><th>Route</th><th>Reviewer</th><th>Stand-in review</th></tr></thead>
 <tbody>{"".join(decision_rows)}</tbody>
 </table>
 </div>
+
+<h2>Decision support evidence</h2>
+<p>Open any record to inspect the exact input, applicable policy, typed findings and snapshot hash. Open concerns have no completed customer decision or verified correction.</p>
+{"".join('<details id="' + e(r['record_ref']) + '"><summary>' + e(r['record_ref']) + ' · ' + e(r['decision_support_assessment']['decision_support'].replace('_',' ')) + ' · ' + e(r['route']) + '</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">' + e(json.dumps(r['decision_support_assessment'],indent=2)) + '</pre></details>' for r in rows)}
 
 <h2>Trace one decision</h2>
 <p>Every audit entry that concerns {e(res["trace_ref"])}, in the order it was written. This is the record a reviewer or examiner would pull to see why the final decision was made. Each entry's hash links it to the entry before it in the full log.</p>
@@ -1010,11 +1037,12 @@ def comparison_rows(results: List[Dict[str, Any]]) -> List[Tuple[str, List[str]]
         ("Audit logging", ["AuditLogger, unchanged" for _ in results]),
         ("Policy checks", [f"PolicyEngine, unchanged; {rules(r)}" for r in results]),
         ("Human review", [f"HITLOrchestrator, unchanged; reviewers with role \u201c{r['scenario'].category}\u201d" for r in results]),
+        ("Decision support", ["Shared Python assess; versioned domain profile; independent of confidence" for _ in results]),
         ("Confidence threshold", [f"{r['scenario'].confidence_threshold:.2f}" for r in results]),
         ("Required inputs", [", ".join(r["scenario"].required_fields) for r in results]),
         ("Outcome", [
-            f"{counts(r)['automated']} automated, {counts(r)['reviewed']} reviewed, "
-            f"{counts(r)['overrides']} overrides" for r in results
+            f"{counts(r)['automated']} without a configured concern, {counts(r)['reviewed']} routed for review, "
+            f"{counts(r)['open']} still open; no customer outcome changed" for r in results
         ]),
         ("Reviewer controls", [
             f"{sum(1 for (lbl, out), exp in zip(r['controls'], ['Rejected', 'Rejected', 'Accepted', 'Rejected']) if out.split(':')[0] == exp)} of 4 as expected"
@@ -1038,7 +1066,7 @@ def render_index_html(results: List[Dict[str, Any]], prov: Dict[str, Any],
         c = counts(res)
         cards.append(
             f'<div class="scenario"><h3><a href="{sc.key}.html">{e(sc.title)}</a></h3>'
-            f"<p>{c['total']} model decisions. {c['automated']} automated, {c['reviewed']} sent to a "
+            f"<p>{c['total']} model recommendations. {c['automated']} without a configured concern, {c['reviewed']} routed to a "
             f"reviewer, who overrode the model {overrides_phrase(c['overrides'])}.</p>"
             f'<p><a href="{sc.key}.html">Open the review record</a></p></div>'
         )
@@ -1053,6 +1081,7 @@ def render_index_html(results: List[Dict[str, Any]], prov: Dict[str, Any],
     shorts = [r["scenario"].short for r in results]
     listed = ", ".join(shorts[:-1]) + (", and " if len(shorts) > 2 else " and ") + shorts[-1]
     body = f"""<h1>One toolkit, {count_word} review workflows</h1>
+<p><a href="release.html">Source, release checks and reusable evidence</a></p>
 <p class="provenance">Synthetic demo of the Responsible AI Toolkit. {provenance_line(prov)}</p>
 {SYNTHETIC_NOTICE}
 
