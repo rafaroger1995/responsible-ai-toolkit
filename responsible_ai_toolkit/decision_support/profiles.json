@@ -1,0 +1,22 @@
+[
+  {
+    "id": "SYN-LENDING", "domain": "lending", "version": "2026.1", "effective_from": "2026-01-01", "effective_to": "2027-01-01",
+    "description": "NEW fictional demo specification: necessary favorable-recommendation restrictions across automated AND manual paths. Not a discovered institutional policy or regulatory threshold.",
+    "paths": ["automated", "manual"], "decision_types": ["approve", "decline"], "favorable_outcomes": ["approve"],
+    "review_role": "lending_review", "authority_role": "credit_authority",
+    "rules": [
+      {"id": "DTI-LIMIT", "field": "debt_to_income", "type": "number", "unit": "ratio", "min": 0, "max": 1, "operator": "<=", "threshold": 0.45, "purpose": "eligibility", "applies_to": ["approve"], "supports_adverse": true, "exception_roles": ["credit_authority"]},
+      {"id": "CREDIT-HISTORY", "field": "credit_history_months", "type": "integer", "unit": "months", "min": 0, "max": 1200, "operator": ">=", "threshold": 0, "purpose": "eligibility", "applies_to": ["approve"], "supports_adverse": false, "exception_roles": []}
+    ]
+  },
+  {
+    "id": "SYN-INSURANCE", "domain": "insurance", "version": "2026.1", "effective_from": "2026-01-01", "effective_to": "2027-01-01",
+    "description": "NEW fictional demo specification: necessary favorable-recommendation restrictions across automated AND manual paths. High coverage is a separate referral, not an eligibility failure.",
+    "paths": ["automated", "manual"], "decision_types": ["offer", "decline"], "favorable_outcomes": ["offer"],
+    "review_role": "insurance_review", "authority_role": "underwriting_authority",
+    "rules": [
+      {"id": "CLAIMS-LIMIT", "field": "prior_claims", "type": "integer", "unit": "count", "min": 0, "max": 1000, "operator": "<", "threshold": 3, "purpose": "eligibility", "applies_to": ["offer"], "supports_adverse": true, "exception_roles": ["underwriting_authority"]},
+      {"id": "INSPECTION", "field": "last_inspection_year", "type": "integer", "unit": "year", "min": 1900, "max": 2100, "operator": ">=", "threshold": 1900, "purpose": "eligibility", "applies_to": ["offer"], "supports_adverse": false, "exception_roles": []}
+    ]
+  }
+]

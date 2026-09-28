@@ -1,8 +1,29 @@
 # Changelog
 
-Dates are commit dates on `main`. Each commit runs the test suite (the **CI** workflow) and the synthetic demo and example scripts (the **Demo run** workflow); results are listed under the repository's Actions tab. Planned work appears in the README under "Planned development" and is added here only once it exists.
+Dates describe recorded development history; unpublished candidate work is explicitly labeled. Remote CI and Pages success must be checked for the specific commit in Actions. A workflow definition alone is not a successful run.
 
-## Unreleased (planned tag: v0.2.0)
+## Unreleased candidate — September 27, 2026
+
+- Recovered source `902485216ca06df43ef611813960131d1a470ab0` includes the September 24 review patch (reconciled as `9aa6274`) and shared decision-support evaluation/review across lending and insurance. Its existing 212 tests were freshly rerun before candidate changes.
+- B1 review reproduced five failing regressions: newly introduced explanation mismatches could still earn verified closure (both domains); a mutating policy callable could change another check's input/export; duplicate rule IDs could produce a clean result (both domains). Corrected these behaviors in `decision_support/review.py`, `decision_support/evaluator.py` and `policy/engine.py`; preserved the original source and results.
+- Added a finite reproducibility/reuse report with frozen source hashes, expected/actual outcomes, original-input comparison, configuration probes and unresolved vendor/model evidence. Automated transform/run timing excludes human adaptation effort. This is not the full proposed validation study.
+- Prepared generated release resources and existing Pages workflow to run tests and publish the identified outputs. Publication remains a separate gate.
+- Replaced abbreviated LICENSE wording with the complete official Apache 2.0 text and retained the project attribution in NOTICE. Updated package documentation, README, contributor guidance and limitations. No new production, compliance or adoption claim is made.
+
+### September 24 2026 local review patch
+
+These changes are a local review patch until merged and published; they are not
+April 2026 capabilities, an independent evaluation, or a production release.
+
+- A request for more information stays open; only final dispositions complete a review.
+- Escalation uses the policy's designated role, releases the old assignment and preserves the original deadline. Unresolved escalations remain eligible for overdue reporting.
+- Empty roles confer no review authority, including after roles are removed from an assigned reviewer.
+- Duplicate registration cannot overwrite a reviewer's authority or workload.
+- SLA rate is unavailable (`None`) with no completed reviews; nonterminal events do not dilute the override rate.
+- Eight new regression cases fail against `86c7aef` and pass with this patch. The full local suite passes 114 tests on Python 3.12.14. No remote CI result is asserted for this patch.
+- Replaced stale getting-started installation/example references and unsupported regulatory/audit claims. Fairness and insurance domain validation remains pending.
+
+### September 22 2026 changes
 
 All changes below were made on September 22, 2026.
 
@@ -42,7 +63,8 @@ This register lists known limitations of the current code. It will be updated as
 
 | Area | Limitation | Status |
 | --- | --- | --- |
-| Human review | A reviewer registered with no roles can decide cases in any category. | Open |
+| Human review | Empty-role authority and false completion on information requests; escalation routing and completion accounting. | Corrected in September 24 local patch; not yet a public release |
+| Human review | `ReviewSession.assign` provides fixture reassignment; no persistent identity, concurrent case store or approval service. Generic HITL still has no public reassignment API. | Bounded demonstration |
 | Audit log | Entries are held in memory; persistence, access control, and retention must be provided by the system using the toolkit. | By design; documented |
 | Audit log | The hash chain uses no secret key. Anyone able to change the log can recompute its hashes. Removal of entries from the end is detectable only against an independently kept head hash. | By design; documented |
 | Fairness module | Not reviewed in the September 2026 corrections. Group-level metrics are diagnostic and do not establish the presence or absence of unlawful discrimination. | Review pending |

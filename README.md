@@ -4,11 +4,22 @@
 
 Responsible AI Toolkit is an open-source reference implementation bringing together audit logging, human review workflows, drift monitoring, configurable policy checks, governance reporting, and group-level outcome metrics.
 
-The project focuses on workflows relevant to U.S. community banks and small and mid-sized insurers. Its objective is to make selected governance practices easier to implement, inspect, and adapt through shared software components and documented examples.
+The project supplies experimental public components for **Trustera**, a proposed AI oversight platform for U.S. banks and insurers across institution sizes. Smaller insurers and community banks are the initial implementation focus. Credit unions remain a public-toolkit audience; this does not establish a new initial commercial segment. The objective is to make selected oversight methods easier to inspect and adapt through shared code and documented examples.
 
 **Development status:** Experimental. Intended for technical evaluation and further development. The toolkit supports practitioner review; it does not establish regulatory compliance or certify a model’s fairness, safety, or suitability.
 
 ## Purpose
+
+### Four-capability status
+
+| Capability | Implemented and tested here | Boundary / next work |
+|---|---|---|
+| Model performance and drift | PSI, KL and Wasserstein distribution comparisons; synthetic monitoring and regression checks | Distribution change does not establish accuracy deterioration. Full context-specific performance validation is unverified. |
+| Explanation assessment | Separate consistency check between recorded reason and supplied trace in `decision_support`; conflict and unknown cases tested | This is not model explanation fidelity or stability. Attribution/explanation-method validation remains planned. |
+| Context-appropriate fairness assessment | Descriptive group metrics and existing unit tests in `fairness` | Domain suitability, permitted attributes, sample adequacy and legal interpretation require qualified evaluation; a metric is not a fairness conclusion. |
+| Validation and accountable review | Dated policy selection, typed snapshots, authority checks, unresolved requests, linked retests, distinct correction/risk acceptance | Synthetic in-memory reference implementation; production identity, durable/concurrent case handling and independent validation are not provided. |
+
+See [decision-support scope](docs/decision_support.md), [reproduction and reuse](docs/release_candidate.md), and [known limitations](CHANGELOG.md#known-limitations). The separate Workflow Lab demonstrates selected workflows and inspects precomputed toolkit output; other website calculations use separate JavaScript.
 
 Evaluating an AI system involves connecting technical findings with accountable decisions: what was evaluated, which inputs and policies were used, who reviewed the results, and what action followed.
 
@@ -51,6 +62,7 @@ python -m pip install -e ".[dev]"
 python examples/lending_model_review.py
 python examples/insurance_underwriting.py
 python examples/model_review_demo.py demo_output
+python examples/release_check.py demo_output
 ```
 
 Review each script’s inputs, configuration, and assumptions before execution. Use synthetic or appropriately authorized data.
@@ -133,11 +145,11 @@ Dates reflect the repository's commit history.
 
 The following are development priorities, not completed capabilities:
 
-* A versioned, project-defined assurance-record schema linking model identity, evaluation inputs, policy versions, findings, review decisions, exceptions, and remediation.
-* Broader reproducible synthetic profiles for evaluating shared components across lending and insurance workflows, extending the initial comparison in the model review demo.
-* An adaptation report documenting shared code, configuration changes, implementation effort, and limitations.
-* A practitioner review guide with version-specific reproduction instructions.
-* Versioned releases documenting tested behavior and known limitations.
+* Extend the experimental decision-support/review schemas to broader assurance tasks and production requirements.
+* Execute the proposed full three-profile validation study; the current two-domain component demonstration does not complete it.
+* Measure human adaptation and recurring review effort prospectively; no efficiency gain has been established.
+* Obtain independent practitioner feedback and clean-environment reruns.
+* Publish an identified release after candidate checks and publication gates are complete. A local candidate or prepared workflow is not a successful public release.
 
 Longer-term possibilities include integration connectors and a user interface, subject to practical evaluation and demonstrated demand.
 
@@ -162,3 +174,7 @@ This project focuses on reusable AI governance workflows for financial services.
 ## License
 
 [Apache License 2.0](LICENSE).
+
+## Retrospective decision support
+
+The new [decision-support component](docs/decision_support.md) checks supplied policy and evidence separately from explanation consistency. Run `python examples/decision_support_demo.py decision_support_output` to export actual synthetic Python assessments and review/retest histories for the Trustera Workflow Lab. No live customer outcomes are changed.

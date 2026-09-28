@@ -22,9 +22,19 @@ pytest tests/ -v
 
 - Follow existing code style and patterns.
 - Add docstrings for all public classes and methods.
-- Include regulatory framework alignment tags where applicable.
+- Describe exactly which configured behavior a change tests. Reference labels do not establish implementation of a law or framework.
 - Keep the library dependency-light (currently only `numpy`).
 - Financial services examples are especially welcome.
+- Preserve synthetic fixture provenance, expected outcomes, failed runs and source identity. Disclose profile, adapter and common-code changes separately.
+- Do not include real customer data, employer material, private correspondence or unsupported compliance/adoption claims.
+
+## Reproduce the finite release checks
+
+Run `python examples/release_check.py /tmp/toolkit-release-checks` from the pinned
+source after the test suite. Report the actual commit, environment, failures and
+limitations. `release-checks.json` records the frozen code hashes and expected
+versus actual outcomes. Timestamps, run IDs, review UUIDs and related integrity
+hashes vary; semantic findings and declared expected outcomes must match.
 
 ## Reporting Issues
 

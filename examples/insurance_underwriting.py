@@ -5,14 +5,14 @@ Example: Insurance Underwriting Fairness & Governance
 Demonstrates how a regional insurer can use the Responsible AI Toolkit
 to monitor an AI-driven underwriting model for fairness across
 policyholder demographics, detect premium scoring drift, and maintain
-audit-ready compliance evidence.
+illustrative diagnostic records. No regulatory compliance is established.
 
 This example simulates:
   1. An auto insurance pricing model evaluating risk
   2. Fairness monitoring across age and geographic groups
   3. Premium score drift after a catastrophic weather event
-  4. Policy-as-code checks for state insurance regulations
-  5. Audit trail for regulatory examination readiness
+  4. Configured demonstration checks, not state insurance requirements
+  5. An in-memory experimental event log
 
 Run:
     python examples/insurance_underwriting.py
@@ -129,18 +129,18 @@ def main():
     print(drift_report.summary())
 
     # ------------------------------------------------------------------
-    # Step 4: Policy compliance
+    # Step 4: Illustrative policy checks
     # ------------------------------------------------------------------
-    print("\n--- Step 4: Regulatory Policy Checks ---")
+    print("\n--- Step 4: Illustrative Policy Checks (not regulatory standards) ---")
     engine = PolicyEngine()
 
     engine.add_policy(PolicyEngine.fairness_threshold_policy(
         "INS-FAIR-001", "approval_ratio_min", threshold=0.80,
-        frameworks=["State Insurance Reg", "NIST-AI-RMF"],
+        frameworks=[],
     ))
     engine.add_policy(PolicyEngine.drift_threshold_policy(
         "INS-DRIFT-001", psi_threshold=0.25,
-        frameworks=["SR-11-7", "NIST-AI-RMF"],
+        frameworks=[],
     ))
     engine.add_policy(Policy(
         policy_id="INS-RATE-001",
@@ -154,7 +154,7 @@ def main():
     engine.add_policy(PolicyEngine.data_completeness_policy(
         "INS-DATA-001",
         required_fields=["vehicle_year", "driver_age", "zip_code", "claims_history"],
-        frameworks=["NIST-AI-RMF"],
+        frameworks=[],
     ))
 
     dp = biased_report.demographic_parity

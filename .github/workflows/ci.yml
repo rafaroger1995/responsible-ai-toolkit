@@ -33,3 +33,4 @@ jobs:
         run: |
           python examples/lending_model_review.py
           python examples/insurance_underwriting.py
+          python examples/release_check.py /tmp/toolkit-release-checks
